@@ -3,7 +3,10 @@
   "version": "2.0.0",
   "description": "Modern Jira Desktop App built with Electron",
   "main": "out/main/index.js",
-  "author": "",
+  "author": {
+    "name": "JoshWay",
+    "email": "developer@joshway.com"
+  },
   "license": "ISC",
   "homepage": "https://opt.si",
   "scripts": {
@@ -28,10 +31,10 @@
     "electron-updater": "^6.1.0"
   },
   "build": {
-    "appId": "com.yourcompany.jira-desktop",
+    "appId": "com.joshway.jira-desktop",
     "productName": "Jira Desktop",
     "directories": {
-      "output": "out"
+      "output": "dist"
     },
     "files": [
       "out/**/*",
@@ -51,26 +54,63 @@
       "category": "public.app-category.productivity",
       "icon": "resources/icon.icns",
       "hardenedRuntime": true,
+      "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist"
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        },
+        {
+          "target": "pkg",
+          "arch": ["x64", "arm64"]
+        }
+      ]
     },
     "win": {
       "icon": "resources/icon.ico",
+      "publisherName": "JoshWay",
       "target": [
         {
           "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "msi",
           "arch": ["x64"]
         }
       ]
     },
     "linux": {
       "icon": "resources/icon.png",
+      "category": "Network",
+      "maintainer": "JoshWay <developer@joshway.com>",
       "target": [
         {
           "target": "AppImage",
           "arch": ["x64"]
+        },
+        {
+          "target": "deb",
+          "arch": ["x64"]
+        },
+        {
+          "target": "rpm",
+          "arch": ["x64"]
         }
       ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "pkg": {
+      "allowAnywhere": false,
+      "allowCurrentUserHome": false,
+      "allowRootDirectory": false
     }
   }
 }
