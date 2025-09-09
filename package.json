@@ -2,7 +2,7 @@
   "name": "jira-desktop-app",
   "version": "2.0.0",
   "description": "Modern Jira Desktop App built with Electron",
-  "main": "out/main/index.js",
+  "main": "dist/main/main.js",
   "author": {
     "name": "JoshWay",
     "email": "developer@joshway.com"
@@ -34,10 +34,10 @@
     "appId": "com.joshway.jira-desktop",
     "productName": "Jira Desktop",
     "directories": {
-      "output": "dist"
+      "output": "release"
     },
     "files": [
-      "out/**/*",
+      "dist/**/*",
       "node_modules/**/*",
       "package.json"
     ],
