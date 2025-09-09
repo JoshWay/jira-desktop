@@ -5,11 +5,11 @@ A modern, secure desktop wrapper for Atlassian Jira built with Electron, TypeScr
 ## 🚀 Features
 
 - **Modern Stack**: Electron 32+ with TypeScript
-- **Native Dark Mode**: System-aware theme switching
+- **Native Dark Mode**: System-aware theme switching with manual toggle
 - **Cross-Platform**: Windows, macOS, and Linux support
 - **Security Focused**: Sandboxed renderer with context isolation
-- **Auto-Updates**: Built-in update mechanism
-- **Configurable**: Easy Jira URL configuration
+- **Direct Jira Access**: Loads your Jira instance directly in the app
+- **Configurable**: Easy Jira URL configuration via native dialog
 
 ## 🏗️ Architecture
 
@@ -19,8 +19,8 @@ src/
 │   └── main.ts    # App initialization, window management
 ├── preload/       # Secure bridge between main/renderer
 │   └── preload.ts # Context-isolated API exposure
-└── renderer/      # Frontend UI (web technologies)
-    ├── index.html # Configuration interface
+└── renderer/      # Frontend UI (web technologies) - only used in dev mode
+    ├── index.html # Development configuration interface  
     ├── style.css  # Modern CSS with theme support
     └── app.js     # Frontend logic
 ```
@@ -30,7 +30,7 @@ src/
 ### Prerequisites
 
 - Node.js 18+
-- npm or yarn
+- npm (yarn not supported - package-lock.json is used)
 
 ### Setup
 
@@ -38,23 +38,43 @@ src/
 # Install dependencies
 npm install
 
-# Start development server
-npm run dev
-
-# Build for production
+# Build and preview the app
 npm run build
+npm run preview
+
+# Or run development mode (shows config interface)
+npm run dev
 
 # Package for distribution
 npm run dist
 ```
 
-### Configuration
+## 🎯 How to Use
 
-Before building, update your Jira URL in the configuration interface or modify the default in `src/main/main.ts`:
+### First Time Setup
 
-```typescript
-private jiraUrl: string = 'https://YOUR_COMPANY_NAME.atlassian.net/jira/projects'
-```
+1. **Run the app**: `npm run build && npm run preview`
+2. **Configure Jira URL**: 
+   - The app opens to `https://atlassian.net` by default
+   - Press `Cmd+U` (Mac) or `Ctrl+U` (Windows/Linux) to open URL configuration
+   - Enter your company's Jira URL (e.g., `yourcompany.atlassian.net`)
+   - The app will automatically navigate to your Jira instance
+
+### Daily Usage
+
+- App launches directly to your configured Jira instance
+- Use `Cmd+Shift+D` / `Ctrl+Shift+D` to toggle dark mode
+- Use `Cmd+U` / `Ctrl+U` to change Jira URL anytime
+
+## ⌨️ Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Cmd+U` / `Ctrl+U` | Configure Jira URL |
+| `Cmd+Shift+D` / `Ctrl+Shift+D` | Toggle Dark Mode |
+| `Cmd+R` / `Ctrl+R` | Reload Page |
+| `Cmd+Shift+I` / `Ctrl+Shift+I` | Toggle Developer Tools |
+| `Cmd+Q` / `Ctrl+Q` | Quit Application |
 
 ## 📦 Building
 
@@ -75,18 +95,18 @@ npm run dist:all
 
 ## 🎨 Theme Support
 
-The app includes native dark mode support that follows your system preferences:
+The app includes native dark mode support:
 
-- **Automatic**: Follows system theme
-- **Manual Toggle**: `Cmd/Ctrl + Shift + D`
-- **Persistent**: Remembers user preference
+- **System Detection**: Automatically detects your system's dark/light mode preference
+- **Manual Toggle**: `Cmd/Ctrl + Shift + D` or via menu "Jira Desktop" → "Toggle Dark Mode"
+- **Real-time Updates**: Changes immediately when you toggle system theme
 
 ## 🔒 Security Features
 
-- **Context Isolation**: Renderer process is sandboxed
-- **CSP**: Content Security Policy enforcement
-- **External Links**: Safe handling of external URLs
-- **URL Validation**: Atlassian domain restrictions
+- **Context Isolation**: Renderer process is sandboxed with secure preload scripts
+- **External Links**: Safely opens external links in default browser
+- **URL Validation**: Only allows Atlassian domains and configured URLs
+- **No Node Access**: Renderer has no direct access to Node.js APIs
 
 ## 📱 Platform Support
 
@@ -119,11 +139,17 @@ rm -rf node_modules package-lock.json
 npm install
 ```
 
-### Runtime Issues
+### Common Issues
 
+**"Page Unavailable" Error:**
+1. Press `Cmd+U` / `Ctrl+U` to configure your Jira URL
+2. Enter your company's URL (e.g., `yourcompany.atlassian.net`)
+3. Ensure your Jira instance is accessible in a regular browser
+
+**App Won't Load:**
 1. Check that your Jira URL is accessible
-2. Verify CORS settings in Jira admin
-3. Try clearing app data (varies by platform)
+2. Try clearing app data (varies by platform)
+3. Verify network connectivity
 
 ## 📄 License
 
