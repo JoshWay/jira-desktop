@@ -61,10 +61,6 @@
         {
           "target": "dmg",
           "arch": ["x64", "arm64"]
-        },
-        {
-          "target": "pkg",
-          "arch": ["x64", "arm64"]
         }
       ]
     },
@@ -72,10 +68,6 @@
       "icon": "resources/icon.ico",
       "publisherName": "JoshWay",
       "target": [
-        {
-          "target": "nsis",
-          "arch": ["x64"]
-        },
         {
           "target": "msi",
           "arch": ["x64"]
@@ -100,17 +92,6 @@
           "arch": ["x64"]
         }
       ]
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
-    },
-    "pkg": {
-      "allowAnywhere": false,
-      "allowCurrentUserHome": false,
-      "allowRootDirectory": false
     }
   }
 }
