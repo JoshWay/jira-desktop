@@ -1,22 +1,76 @@
 {
   "name": "jira-desktop-app",
-  "version": "1.0.0",
-  "description": "Jira Desktop App",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "build:jira": "node src/jira/build.js",
-    "build:jira-dark": "node src/jira/build-dark.js",
-    "build:all": "yarn build:jira && yarn build:jira-dark",
-    "build": "yarn build:all"
-  },
-  "repository": {
-    "type": "git",
-    "url": ""
-  },
+  "version": "2.0.0",
+  "description": "Modern Jira Desktop App built with Electron",
+  "main": "out/main/index.js",
   "author": "",
   "license": "ISC",
   "homepage": "https://opt.si",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:all": "electron-builder -mwl",
+    "clean": "rimraf dist out"
+  },
   "devDependencies": {
-    "nativefier": "^11.0.2"
+    "@types/node": "^20.11.0",
+    "electron": "^32.0.0",
+    "electron-builder": "^25.0.0",
+    "electron-vite": "^2.0.0",
+    "rimraf": "^5.0.5",
+    "typescript": "^5.3.0",
+    "vite": "^5.0.0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.1.0"
+  },
+  "build": {
+    "appId": "com.yourcompany.jira-desktop",
+    "productName": "Jira Desktop",
+    "directories": {
+      "output": "out"
+    },
+    "files": [
+      "out/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources",
+        "to": "resources",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "resources/icon.icns",
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "win": {
+      "icon": "resources/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "linux": {
+      "icon": "resources/icon.png",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": ["x64"]
+        }
+      ]
+    }
   }
 }

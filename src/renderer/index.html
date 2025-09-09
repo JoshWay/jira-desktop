@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jira Desktop - Settings</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div id="app">
+    <div class="container">
+      <h1>🚀 Jira Desktop</h1>
+      <p class="subtitle">Configure your Jira instance</p>
+      
+      <div class="card">
+        <h2>Jira Configuration</h2>
+        <form id="config-form">
+          <div class="form-group">
+            <label for="jira-url">Jira URL:</label>
+            <input 
+              type="url" 
+              id="jira-url" 
+              placeholder="https://your-company.atlassian.net"
+              required
+            >
+            <small>Enter your company's Jira URL</small>
+          </div>
+          
+          <button type="submit" class="btn-primary">
+            Launch Jira
+          </button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Theme</h2>
+        <div class="theme-controls">
+          <button id="theme-toggle" class="btn-secondary">
+            Toggle Dark Mode
+          </button>
+          <div class="theme-info">
+            Current theme: <span id="current-theme">light</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>About</h2>
+        <div class="about-info">
+          <p><strong>Version:</strong> <span id="app-version">2.0.0</span></p>
+          <p><strong>Electron:</strong> <span id="electron-version">-</span></p>
+          <p><strong>Platform:</strong> <span id="platform">-</span></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
