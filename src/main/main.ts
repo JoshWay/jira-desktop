@@ -3,7 +3,7 @@ import { join } from 'path'
 
 class JiraApp {
   private mainWindow: BrowserWindow | null = null
-  private jiraUrl: string = 'https://atlassian.net'
+  private jiraUrl: string = 'https://id.atlassian.com/login'
 
   constructor() {
     this.initializeApp()
