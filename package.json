@@ -65,8 +65,7 @@
       ]
     },
     "dmg": {
-      "blockMap": false
-      ]
+  "blockMap": false
   },
     "win": {
       "icon": "resources/icon.ico",
