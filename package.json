@@ -41,12 +41,10 @@
       "node_modules/**/*",
       "package.json"
     ],
+    "extraResources": [
       {
         "from": "resources",
         "to": "resources",
-    "dmg": {
-      "blockMap": false
-    },
         "filter": [
           "**/*"
         ]
@@ -62,9 +60,12 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["x64", "arm64"],
-  }
-  }
+          "arch": ["x64", "arm64"]
+        }
+      ]
+    },
+    "dmg": {
+      "blockMap": false
       ]
   },
     "win": {
