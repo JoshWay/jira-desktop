@@ -61,7 +61,7 @@
         {
           "target": "dmg",
           "arch": ["x64", "arm64"],
-          "differentialPackage": false
+          "blockMap": false
         }
       ]
     },
