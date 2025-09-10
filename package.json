@@ -14,9 +14,10 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder",
+    "dist": "electron-builder && npm run clean-blockmap",
     "dist:all": "electron-builder -mwl",
-    "clean": "rimraf dist out"
+    "clean": "rimraf dist out",
+    "clean-blockmap": "rimraf release/**/*.blockmap"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
@@ -36,7 +37,6 @@
     "directories": {
       "output": "release"
     },
-    "blockMap": false,
     "files": [
       "dist/**/*",
       "node_modules/**/*",
