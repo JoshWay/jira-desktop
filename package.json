@@ -36,6 +36,7 @@
     "directories": {
       "output": "release"
     },
+    "blockMap": false,
     "files": [
       "dist/**/*",
       "node_modules/**/*",
@@ -64,9 +65,6 @@
         }
       ]
     },
-    "dmg": {
-  "blockMap": false
-  },
     "win": {
       "icon": "resources/icon.ico",
       "publisherName": "JoshWay",
