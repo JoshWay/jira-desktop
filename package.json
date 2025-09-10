@@ -17,7 +17,7 @@
     "dist": "electron-builder && npm run clean-blockmap",
     "dist:all": "electron-builder -mwl",
     "clean": "rimraf dist out",
-    "clean-blockmap": "rimraf release/**/*.blockmap"
+    "clean-blockmap": "rm -f release/*.blockmap"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
