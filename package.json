@@ -41,10 +41,12 @@
       "node_modules/**/*",
       "package.json"
     ],
-    "extraResources": [
       {
         "from": "resources",
         "to": "resources",
+    "dmg": {
+      "blockMap": false
+    },
         "filter": [
           "**/*"
         ]
@@ -61,10 +63,10 @@
         {
           "target": "dmg",
           "arch": ["x64", "arm64"],
-          "blockMap": false
-        }
+  }
+  }
       ]
-    },
+  },
     "win": {
       "icon": "resources/icon.ico",
       "publisherName": "JoshWay",
