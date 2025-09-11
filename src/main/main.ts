@@ -164,13 +164,14 @@ class JiraApp {
   }
 
   private async promptForJiraUrl(): Promise<void> {
-    // Create a simple prompt window
+    // Create a simple prompt window (independent, not modal)
     const promptWindow = new BrowserWindow({
       width: 500,
       height: 300,
       resizable: false,
-      modal: true,
-      parent: this.mainWindow!,
+      modal: false,
+      alwaysOnTop: true,
+      center: true,
       webPreferences: {
         nodeIntegration: true,
         contextIsolation: false
