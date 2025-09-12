@@ -34,7 +34,11 @@ class JiraApp {
     app.on('web-contents-created', (_, contents) => {
       contents.setWindowOpenHandler(({ url }) => {
         if (url.includes('atlassian.net') || url.startsWith(this.jiraUrl)) {
-          return { action: 'allow' }
+          // Navigate in current window instead of opening new window
+          if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+            this.mainWindow.loadURL(url)
+          }
+          return { action: 'deny' }
         }
         shell.openExternal(url)
         return { action: 'deny' }
