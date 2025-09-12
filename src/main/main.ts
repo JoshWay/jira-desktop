@@ -5,6 +5,7 @@ import { join } from 'path'
 class JiraApp {
   private mainWindow: BrowserWindow | null = null
   private jiraUrl: string = 'https://id.atlassian.com/login'
+  private manualUpdateCheck: boolean = false
 
   constructor() {
     this.initializeApp()
@@ -107,7 +108,7 @@ class JiraApp {
           { type: 'separator' },
           {
             label: 'Check for Updates...',
-            click: () => this.checkForUpdates()
+            click: () => this.manualCheckForUpdates()
           },
           { type: 'separator' },
           { role: 'hide' },
@@ -306,10 +307,20 @@ class JiraApp {
 
     autoUpdater.on('update-not-available', () => {
       console.log('App is up to date')
+      // Only show dialog for manual checks, not automatic startup checks
+      if (this.manualUpdateCheck) {
+        this.showNoUpdateDialog()
+        this.manualUpdateCheck = false
+      }
     })
 
     autoUpdater.on('error', (error) => {
       console.error('Auto-updater error:', error)
+      // Show user-friendly error dialog for manual checks
+      if (this.manualUpdateCheck) {
+        this.showUpdateErrorDialog(error.message)
+        this.manualUpdateCheck = false
+      }
     })
 
     autoUpdater.on('download-progress', (progress) => {
@@ -326,6 +337,20 @@ class JiraApp {
       await autoUpdater.checkForUpdates()
     } catch (error) {
       console.error('Failed to check for updates:', error)
+      // Error handling is done in the error event handler
+    }
+  }
+
+  private async manualCheckForUpdates(): Promise<void> {
+    this.manualUpdateCheck = true
+    try {
+      await this.checkForUpdates()
+    } catch (error) {
+      // Fallback error handling if the event handler doesn't catch it
+      if (this.manualUpdateCheck) {
+        this.showUpdateErrorDialog('Unable to check for updates. Please try again later.')
+        this.manualUpdateCheck = false
+      }
     }
   }
 
@@ -378,6 +403,26 @@ class JiraApp {
     if (result.response === 0) {
       autoUpdater.quitAndInstall()
     }
+  }
+
+  private showNoUpdateDialog(): void {
+    dialog.showMessageBox(this.mainWindow!, {
+      type: 'info',
+      title: 'No Updates Available',
+      message: 'You\'re running the latest version!',
+      detail: `Jira Desktop v${app.getVersion()} is up to date. No new updates are available at this time.`,
+      buttons: ['OK']
+    })
+  }
+
+  private showUpdateErrorDialog(errorMessage: string): void {
+    dialog.showMessageBox(this.mainWindow!, {
+      type: 'warning',
+      title: 'Update Check Failed',
+      message: 'Unable to check for updates',
+      detail: 'There was a problem checking for updates. Please check your internet connection and try again later.',
+      buttons: ['OK']
+    })
   }
 }
 
