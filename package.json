@@ -37,6 +37,11 @@
     "directories": {
       "output": "release"
     },
+    "publish": {
+      "provider": "github",
+      "owner": "JoshWay",
+      "repo": "jira-desktop"
+    },
     "files": [
       "dist/**/*",
       "node_modules/**/*",
