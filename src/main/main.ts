@@ -2,6 +2,13 @@ import { app, BrowserWindow, Menu, nativeTheme, ipcMain, shell, dialog } from 'e
 import { autoUpdater } from 'electron-updater'
 import { join } from 'path'
 
+interface UpdateInfo {
+  version: string
+  releaseDate?: string
+  releaseName?: string
+  releaseNotes?: string
+}
+
 class JiraApp {
   private mainWindow: BrowserWindow | null = null
   private jiraUrl: string = 'https://id.atlassian.com/login'
@@ -391,7 +398,7 @@ class JiraApp {
     }
   }
 
-  private async showUpdateDialog(updateInfo: any): Promise<void> {
+  private async showUpdateDialog(updateInfo: UpdateInfo): Promise<void> {
     const result = await dialog.showMessageBox(this.mainWindow!, {
       type: 'info',
       title: 'Update Available',
@@ -457,7 +464,7 @@ class JiraApp {
       type: 'warning',
       title: 'Update Check Failed',
       message: 'Unable to check for updates',
-      detail: 'There was a problem checking for updates. Please check your internet connection and try again later.',
+      detail: `There was a problem checking for updates. Please check your internet connection and try again later.\n\nError details: ${errorMessage}`,
       buttons: ['OK']
     })
   }
