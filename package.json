@@ -1,6 +1,6 @@
 {
   "name": "jira-desktop-app",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "Modern Jira Desktop App built with Electron",
   "main": "dist/main/main.js",
   "author": {
