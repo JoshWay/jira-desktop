@@ -1,6 +1,6 @@
 {
   "name": "jira-desktop-app",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Modern Jira Desktop App built with Electron",
   "main": "dist/main/main.js",
   "author": {
@@ -14,9 +14,10 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder",
+    "dist": "electron-builder && npm run clean-blockmap",
     "dist:all": "electron-builder -mwl",
-    "clean": "rimraf dist out"
+    "clean": "rimraf dist out",
+    "clean-blockmap": "rm -f release/*.blockmap"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
@@ -35,6 +36,11 @@
     "productName": "Jira Desktop",
     "directories": {
       "output": "release"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "JoshWay",
+      "repo": "jira-desktop"
     },
     "files": [
       "dist/**/*",

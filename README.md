@@ -11,6 +11,50 @@ A modern, secure desktop wrapper for Atlassian Jira built with Electron, TypeScr
 - **Direct Jira Access**: Loads your Jira instance directly in the app
 - **Configurable**: Easy Jira URL configuration via native dialog
 
+## 📦 Installation
+
+### Quick Install (Recommended)
+
+**Don't want to clone the repo?** Download a pre-built installer from the [latest release](../../releases/latest):
+
+- **Windows**: Download `jira-desktop-app-2.0.0.msi` and run it
+- **macOS**: Download `Jira Desktop-2.0.0.dmg`, mount it, and drag to Applications
+- **Linux**: Download `Jira Desktop-2.0.0.AppImage`, make executable, and run
+
+### Build from Source
+
+**Want to customize or contribute?** Clone and build:
+
+```bash
+# Clone the repository
+git clone https://github.com/JoshWay/jira-desktop.git
+cd jira-desktop
+
+# Install dependencies  
+npm install
+
+# Build and launch
+npm run build && npm run preview
+```
+
+**First Launch Setup:**
+1. App opens showing "Page Unavailable" - this is expected
+2. Press `Cmd+U` (Mac) or `Ctrl+U` (Windows/Linux) 
+3. Enter your company Jira URL: `yourcompany.atlassian.net`
+4. Click "Set URL" - app redirects to your Jira login
+
+✅ **Done!** The app now launches directly to your Jira instance.
+
+### Build Your Own Installer
+
+```bash
+# Build for your current platform
+npm run dist
+
+# Build for all platforms (macOS, Windows, Linux)
+npm run dist:all
+```
+
 ## 🏗️ Architecture
 
 ```
@@ -28,96 +72,30 @@ src/
 ## 🛠️ Development
 
 ### Prerequisites
-
 - Node.js 18+
 - npm (yarn not supported - package-lock.json is used)
-
-### Quick Start (3 Steps)
-
-**Step 1: Install**
-```bash
-npm install
-```
-
-**Step 2: Build & Launch**
-```bash
-npm run build && npm run preview
-```
-
-**Step 3: Configure Your Jira**
-- App opens showing "Page Unavailable" - this is expected
-- Press `Cmd+U` (Mac) or `Ctrl+U` (Windows/Linux) 
-- Enter your company Jira URL: `yourcompany.atlassian.net`
-- Click "Set URL" - app redirects to your Jira login
-
-✅ **Done!** The app now launches directly to your Jira instance.
 
 ### Development Mode
 ```bash
 npm run dev    # Shows configuration interface instead of Jira
 ```
 
-## 🖥️ Install as Desktop App
+### Manual Installation Commands
 
-### For Linux Users
+If you prefer individual steps instead of the Quick Install above:
 
-**Step 1: Build installers**
 ```bash
-npm run dist --linux
-```
+# Linux
+chmod +x dist/Jira\ Desktop-2.0.0.AppImage && ./dist/Jira\ Desktop-2.0.0.AppImage
+# Or: sudo dpkg -i dist/jira-desktop-app_2.0.0_amd64.deb
+# Or: sudo rpm -i dist/jira-desktop-app-2.0.0.x86_64.rpm
 
-**Step 2: Choose your install method**
-```bash
-# Option 1: AppImage (portable, no installation needed)
-chmod +x dist/Jira\ Desktop-2.0.0.AppImage
-./dist/Jira\ Desktop-2.0.0.AppImage
-
-# Option 2: DEB package (Ubuntu/Debian)
-sudo dpkg -i dist/jira-desktop-app_2.0.0_amd64.deb
-
-# Option 3: RPM package (RedHat/Fedora/SUSE)
-sudo rpm -i dist/jira-desktop-app-2.0.0.x86_64.rpm
-
-# Option 4: NPM (coming soon)
-# npm install -g jira-desktop-app
-```
-
-✅ **Result:** App appears in Applications menu with Jira icon
-
-### For macOS Users
-
-**Step 1: Build installer**
-```bash
-npm run dist --mac
-```
-
-**Step 2: Install the app**
-```bash
-# Install DMG (drag to Applications folder)
+# macOS 
 open dist/Jira\ Desktop-2.0.0.dmg
-# Drag "Jira Desktop" to Applications folder in the opened window
-```
+# Then drag "Jira Desktop" to Applications folder
 
-✅ **Result:** App appears in Applications folder and Launchpad with Jira icon
-
-### For Windows Users
-
-**Step 1: Build installer**
-```bash
-npm run dist --win
-```
-
-**Step 2: Install the app**
-```bash
-# Install MSI package
+# Windows
 msiexec /i dist/jira-desktop-app-2.0.0.msi
-```
-
-✅ **Result:** App appears in Start Menu with Jira icon
-
-### Quick Build for Current Platform
-```bash
-npm run dist   # Creates installers for your current OS only
 ```
 
 ## ⌨️ Keyboard Shortcuts
