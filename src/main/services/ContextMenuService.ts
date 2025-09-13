@@ -101,7 +101,6 @@ export class ContextMenuService {
       menuItems.push(
         new MenuItem({
           label: `Open ${productName} in New Window`,
-          icon: product ? this.getProductIconPath(product.icon) : undefined,
           click: async () => {
             await this.openInNewWindow(params.linkURL, product, false)
           }
@@ -239,11 +238,6 @@ export class ContextMenuService {
     }
   }
 
-  private getProductIconPath(iconName: string): string {
-    // Return path to product icon for menu display
-    // Note: Electron menu icons are limited, so this might not always work
-    return ''
-  }
 
   private emitTelemetryEvent(eventName: string, data: any): void {
     // TODO: Implement telemetry emission

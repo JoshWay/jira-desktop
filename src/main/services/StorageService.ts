@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { writeFileSync, readFileSync, existsSync } from 'fs'
+import { writeFile, readFile, access } from 'fs/promises'
 import { join } from 'path'
 
 export interface StorageData {
@@ -9,6 +9,7 @@ export interface StorageData {
 export class StorageService {
   private dataPath: string
   private data: StorageData = {}
+  private isLoaded: boolean = false
 
   constructor(fileName: string = 'app-data.json') {
     this.dataPath = join(app.getPath('userData'), fileName)
@@ -21,12 +22,12 @@ export class StorageService {
 
   public set(key: string, value: any): void {
     this.data[key] = value
-    this.saveData()
+    this.saveData() // Fire and forget - non-blocking
   }
 
   public delete(key: string): void {
     delete this.data[key]
-    this.saveData()
+    this.saveData() // Fire and forget - non-blocking
   }
 
   public has(key: string): boolean {
@@ -35,28 +36,29 @@ export class StorageService {
 
   public clear(): void {
     this.data = {}
-    this.saveData()
+    this.saveData() // Fire and forget - non-blocking
   }
 
   public getAll(): StorageData {
     return { ...this.data }
   }
 
-  private loadData(): void {
+  private async loadData(): Promise<void> {
     try {
-      if (existsSync(this.dataPath)) {
-        const fileContent = readFileSync(this.dataPath, 'utf-8')
-        this.data = JSON.parse(fileContent)
-      }
+      await access(this.dataPath)
+      const fileContent = await readFile(this.dataPath, 'utf-8')
+      this.data = JSON.parse(fileContent)
+      this.isLoaded = true
     } catch (error) {
-      console.error('Failed to load storage data:', error)
+      // File doesn't exist or is unreadable - start with empty data
       this.data = {}
+      this.isLoaded = true
     }
   }
 
-  private saveData(): void {
+  private async saveData(): Promise<void> {
     try {
-      writeFileSync(this.dataPath, JSON.stringify(this.data, null, 2), 'utf-8')
+      await writeFile(this.dataPath, JSON.stringify(this.data, null, 2), 'utf-8')
     } catch (error) {
       console.error('Failed to save storage data:', error)
     }

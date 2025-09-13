@@ -461,10 +461,10 @@ class JiraApp {
         normalizedUrl = 'https://' + normalizedUrl
       }
       
-      // Identify product if auto-detect
+      // Identify product if auto-detect, otherwise lookup by ID
       const detectedProduct = product === 'auto' 
         ? this.windowManager.identifyProduct(normalizedUrl)
-        : { id: product, name: product.charAt(0).toUpperCase() + product.slice(1), domains: [], icon: 'icon.png', defaultSize: { width: 1200, height: 900 }, backgroundColor: '#172B4D' }
+        : this.windowManager.getProductById(product)
       
       if (detectedProduct) {
         await this.windowManager.createWindow({

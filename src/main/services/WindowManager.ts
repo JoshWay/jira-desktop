@@ -34,6 +34,7 @@ export class WindowManager {
   private windowStates: Map<string, WindowState> = new Map()
   private sessionPartition: string = 'persist:atlassian-shared'
   private storage: StorageService
+  private saveStateTimeout: NodeJS.Timeout | null = null
 
   private readonly products: Map<string, AtlassianProduct> = new Map([
     ['jira', {
@@ -89,6 +90,10 @@ export class WindowManager {
   constructor() {
     this.storage = new StorageService('window-states.json')
     this.loadWindowStates()
+  }
+
+  public getProductById(productId: string): AtlassianProduct | null {
+    return this.products.get(productId) || null
   }
 
   public identifyProduct(url: string): AtlassianProduct | null {
@@ -198,6 +203,15 @@ export class WindowManager {
   }
 
   public closeAllWindows(): void {
+    // Clear any pending save operations
+    if (this.saveStateTimeout) {
+      clearTimeout(this.saveStateTimeout)
+      this.saveStateTimeout = null
+    }
+    
+    // Save current states before closing
+    this.saveWindowStates()
+    
     for (const window of this.windows.values()) {
       if (!window.isDestroyed()) {
         window.close()
@@ -212,7 +226,7 @@ export class WindowManager {
       this.windows.delete(windowId)
     })
 
-    // Handle window state changes for persistence
+    // Handle window state changes for persistence (with debouncing)
     const saveWindowState = () => {
       if (window.isDestroyed()) return
       
@@ -226,7 +240,7 @@ export class WindowManager {
         isMinimized: window.isMinimized()
       }
       this.windowStates.set(windowId, windowState)
-      this.saveWindowStates()
+      this.debouncedSaveWindowStates()
     }
 
     window.on('resized', saveWindowState)
@@ -252,8 +266,22 @@ export class WindowManager {
   }
 
   private generateWindowId(productId: string, url: string): string {
-    // Create a simple hash-based ID for the window
-    return `${productId}-${url.split('/').slice(0, 4).join('/')}`
+    // Create a robust ID for the window based on productId, hostname, and up to 4 path segments
+    try {
+      const parsedUrl = new URL(url)
+      const hostname = parsedUrl.hostname
+      // Remove leading/trailing slashes and split path
+      const pathSegments = parsedUrl.pathname.replace(/^\/+|\/+$/g, '').split('/')
+      // Pad to 4 segments if needed
+      while (pathSegments.length < 4) {
+        pathSegments.push('')
+      }
+      const id = `${productId}-${hostname}/${pathSegments.slice(0, 4).join('/')}`
+      return id
+    } catch {
+      // Fallback: use productId and a base64-encoded URL
+      return `${productId}-${Buffer.from(url).toString('base64')}`
+    }
   }
 
   private getProductIcon(product: AtlassianProduct): string {
@@ -296,5 +324,18 @@ export class WindowManager {
     } catch (error) {
       console.error('Failed to save window states:', error)
     }
+  }
+
+  private debouncedSaveWindowStates(): void {
+    // Clear existing timeout
+    if (this.saveStateTimeout) {
+      clearTimeout(this.saveStateTimeout)
+    }
+    
+    // Set new timeout for 500ms debounce
+    this.saveStateTimeout = setTimeout(() => {
+      this.saveWindowStates()
+      this.saveStateTimeout = null
+    }, 500)
   }
 }
