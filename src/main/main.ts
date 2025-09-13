@@ -1,12 +1,15 @@
 import { app, BrowserWindow, Menu, nativeTheme, ipcMain, shell, dialog } from 'electron'
+import { autoUpdater } from 'electron-updater'
 import { join } from 'path'
 
 class JiraApp {
   private mainWindow: BrowserWindow | null = null
   private jiraUrl: string = 'https://id.atlassian.com/login'
+  private manualUpdateCheck: boolean = false
 
   constructor() {
     this.initializeApp()
+    this.setupAutoUpdater()
   }
 
   private initializeApp(): void {
@@ -101,6 +104,11 @@ class JiraApp {
             label: 'Toggle Dark Mode',
             accelerator: 'CommandOrControl+Shift+D',
             click: () => this.toggleDarkMode()
+          },
+          { type: 'separator' },
+          {
+            label: 'Check for Updates...',
+            click: () => this.manualCheckForUpdates()
           },
           { type: 'separator' },
           { role: 'hide' },
@@ -275,6 +283,146 @@ class JiraApp {
 
   private toggleDarkMode(): void {
     nativeTheme.themeSource = nativeTheme.shouldUseDarkColors ? 'light' : 'dark'
+  }
+
+  private setupAutoUpdater(): void {
+    // Configure auto-updater for GitHub releases
+    autoUpdater.setFeedURL({
+      provider: 'github',
+      owner: 'JoshWay',
+      repo: 'jira-desktop'
+    })
+
+    // Check for updates when app starts (after window is ready)
+    app.whenReady().then(() => {
+      setTimeout(() => {
+        this.checkForUpdates()
+      }, 3000) // Wait 3 seconds after app start
+    })
+
+    // Handle update events
+    autoUpdater.on('update-available', (info) => {
+      this.showUpdateDialog(info)
+    })
+
+    autoUpdater.on('update-not-available', () => {
+      console.log('App is up to date')
+      // Only show dialog for manual checks, not automatic startup checks
+      if (this.manualUpdateCheck) {
+        this.showNoUpdateDialog()
+        this.manualUpdateCheck = false
+      }
+    })
+
+    autoUpdater.on('error', (error) => {
+      console.error('Auto-updater error:', error)
+      // Show user-friendly error dialog for manual checks
+      if (this.manualUpdateCheck) {
+        this.showUpdateErrorDialog(error.message)
+        this.manualUpdateCheck = false
+      }
+    })
+
+    autoUpdater.on('download-progress', (progress) => {
+      console.log(`Download progress: ${Math.round(progress.percent)}%`)
+    })
+
+    autoUpdater.on('update-downloaded', () => {
+      this.showRestartDialog()
+    })
+  }
+
+  private async checkForUpdates(): Promise<void> {
+    try {
+      await autoUpdater.checkForUpdates()
+    } catch (error) {
+      console.error('Failed to check for updates:', error)
+      // Error handling is done in the error event handler
+    }
+  }
+
+  private async manualCheckForUpdates(): Promise<void> {
+    this.manualUpdateCheck = true
+    try {
+      await this.checkForUpdates()
+    } catch (error) {
+      // Fallback error handling if the event handler doesn't catch it
+      if (this.manualUpdateCheck) {
+        this.showUpdateErrorDialog('Unable to check for updates. Please try again later.')
+        this.manualUpdateCheck = false
+      }
+    }
+  }
+
+  private async showUpdateDialog(updateInfo: any): Promise<void> {
+    const result = await dialog.showMessageBox(this.mainWindow!, {
+      type: 'info',
+      title: 'Update Available',
+      message: `Jira Desktop v${updateInfo.version} is available!`,
+      detail: `You're currently running v${app.getVersion()}. Would you like to download and install the update?`,
+      buttons: ['Update Now', 'Remind Me Later', 'Skip This Version'],
+      defaultId: 0,
+      cancelId: 1
+    })
+
+    switch (result.response) {
+      case 0: // Update Now
+        autoUpdater.downloadUpdate()
+        this.showDownloadingDialog()
+        break
+      case 1: // Remind Me Later
+        console.log('User chose to be reminded later')
+        break
+      case 2: // Skip This Version
+        console.log('User chose to skip this version')
+        break
+    }
+  }
+
+  private showDownloadingDialog(): void {
+    dialog.showMessageBox(this.mainWindow!, {
+      type: 'info',
+      title: 'Downloading Update',
+      message: 'Downloading update...',
+      detail: 'The update is being downloaded in the background. You\'ll be notified when it\'s ready to install.',
+      buttons: ['OK']
+    })
+  }
+
+  private async showRestartDialog(): Promise<void> {
+    const result = await dialog.showMessageBox(this.mainWindow!, {
+      type: 'info',
+      title: 'Update Ready',
+      message: 'Update downloaded successfully!',
+      detail: 'The update has been downloaded and is ready to install. Would you like to restart the app now?',
+      buttons: ['Restart Now', 'Restart Later'],
+      defaultId: 0,
+      cancelId: 1
+    })
+
+    if (result.response === 0) {
+      autoUpdater.quitAndInstall()
+    }
+  }
+
+  private showNoUpdateDialog(): void {
+    dialog.showMessageBox(this.mainWindow!, {
+      type: 'info',
+      title: 'No Updates Available',
+      message: 'You\'re running the latest version!',
+      detail: `Jira Desktop v${app.getVersion()} is up to date. No new updates are available at this time.`,
+      buttons: ['OK']
+    })
+  }
+
+  private showUpdateErrorDialog(errorMessage: string): void {
+    dialog.showMessageBox(this.mainWindow!, {
+      type: 'warning',
+      title: 'Update Check Failed',
+      message: 'Unable to check for updates',
+      detail: 'There was a problem checking for updates. Please check your internet connection and try again later.',
+      buttons: ['OK']
+    })
   }
 }
 
