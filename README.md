@@ -1,208 +1,248 @@
-# Modern Jira Desktop App
+# Jira Desktop App
 
-A modern, secure desktop wrapper for Atlassian Jira built with Electron, TypeScript, and Electron Builder.
+A modern, cross-platform desktop application for Atlassian Jira built with Electron 32+, TypeScript, and Electron Builder.
 
-## 🚀 Features
+## Features
 
-- **Modern Stack**: Electron 32+ with TypeScript
-- **Native Dark Mode**: System-aware theme switching with manual toggle
-- **Cross-Platform**: Windows, macOS, and Linux support
-- **Security Focused**: Sandboxed renderer with context isolation
-- **Direct Jira Access**: Loads your Jira instance directly in the app
-- **Configurable**: Easy Jira URL configuration via native dialog
+- **Modern Technology Stack**: Built with Electron 32+ and TypeScript for reliability and maintainability
+- **Cross-Platform Support**: Native applications for Windows, macOS, and Linux
+- **Security Focused**: Sandboxed renderer process with context isolation and secure preload scripts
+- **Native Dark Mode**: System-aware theme detection with manual toggle support
+- **Auto-Update System**: Built-in update checking and installation capabilities
+- **Native Integration**: System tray, native menus, and keyboard shortcuts
+- **URL Configuration**: Easy Jira instance configuration through native dialogs
 
-## 📦 Installation
+## Installation
 
-### Quick Install (Recommended)
+### Pre-built Releases
 
-**Don't want to clone the repo?** Download a pre-built installer from the [latest release](../../releases/latest):
+Download the latest release from [GitHub Releases](https://github.com/JoshWay/jira-desktop/releases/latest):
 
-- **Windows**: Download `jira-desktop-app-2.0.0.msi` and run it
-- **macOS**: Download `Jira Desktop-2.0.0.dmg`, mount it, and drag to Applications
-- **Linux**: Download `Jira Desktop-2.0.0.AppImage`, make executable, and run
+#### Linux
 
-### Build from Source
+- **AppImage**: `Jira Desktop-2.1.0.AppImage` - Universal portable application
+- **Debian/Ubuntu**: `jira-desktop-app_2.1.0_amd64.deb` - Native package
+- **RPM**: `jira-desktop-app-2.1.0.x86_64.rpm` - For RedHat/Fedora/SUSE
 
-**Want to customize or contribute?** Clone and build:
+#### Windows
+
+- **MSI Installer**: `Jira Desktop-2.1.0.msi` - Windows installer package
+
+#### macOS
+
+- **Intel Macs**: `Jira Desktop-2.1.0.dmg` - x64 architecture
+- **Apple Silicon**: `Jira Desktop-2.1.0-arm64.dmg` - ARM64 architecture
+
+### Installation Instructions
+
+#### Linux Installation
+
+```bash
+# AppImage (Recommended)
+chmod +x "Jira Desktop-2.1.0.AppImage"
+./Jira\ Desktop-2.1.0.AppImage
+
+# Debian/Ubuntu
+sudo dpkg -i jira-desktop-app_2.1.0_amd64.deb
+
+# RPM-based distributions
+sudo rpm -i jira-desktop-app-2.1.0.x86_64.rpm
+```
+
+#### Windows Installation
+
+1. Download `Jira Desktop-2.1.0.msi`
+2. Run the installer as administrator
+3. Launch from Start Menu
+
+#### macOS Installation
+
+1. Download the appropriate DMG for your Mac architecture
+2. Open DMG and drag app to Applications folder
+3. Launch from Applications (may need to right-click → Open on first launch)
+
+## Development Setup
+
+### Prerequisites
+
+- Node.js 18 or higher
+- npm (package-lock.json is used, not yarn)
+
+### Building from Source
 
 ```bash
 # Clone the repository
 git clone https://github.com/JoshWay/jira-desktop.git
 cd jira-desktop
 
-# Install dependencies  
+# Install dependencies
 npm install
 
-# Build and launch
-npm run build && npm run preview
+# Development mode
+npm run dev
+
+# Build for production
+npm run build
+
+# Preview production build
+npm run preview
 ```
 
-**First Launch Setup:**
-1. App opens showing "Page Unavailable" - this is expected
-2. Press `Cmd+U` (Mac) or `Ctrl+U` (Windows/Linux) 
-3. Enter your company Jira URL: `yourcompany.atlassian.net`
-4. Click "Set URL" - app redirects to your Jira login
-
-✅ **Done!** The app now launches directly to your Jira instance.
-
-### Build Your Own Installer
+### Creating Distribution Packages
 
 ```bash
-# Build for your current platform
+# Build for current platform only
 npm run dist
 
-# Build for all platforms (macOS, Windows, Linux)
+# Build for all platforms (requires platform-specific build environments)
 npm run dist:all
+
+# Build directory-only (no installer)
+npm run pack
+
+# Clean build artifacts
+npm run clean
 ```
 
-## 🏗️ Architecture
+## Configuration
 
-```
-src/
-├── main/          # Electron main process (Node.js)
-│   └── main.ts    # App initialization, window management
-├── preload/       # Secure bridge between main/renderer
-│   └── preload.ts # Context-isolated API exposure
-└── renderer/      # Frontend UI (web technologies) - only used in dev mode
-    ├── index.html # Development configuration interface  
-    ├── style.css  # Modern CSS with theme support
-    └── app.js     # Frontend logic
-```
+### First Launch Setup
 
-## 🛠️ Development
+1. Launch the application
+2. Press `Ctrl+U` (Linux/Windows) or `Cmd+U` (macOS) to open URL configuration
+3. Enter your Jira instance URL (e.g., `yourcompany.atlassian.net`)
+4. Click "Set URL" to save and redirect to your Jira login
 
-### Prerequisites
-- Node.js 18+
-- npm (yarn not supported - package-lock.json is used)
-
-### Development Mode
-```bash
-npm run dev    # Shows configuration interface instead of Jira
-```
-
-### Manual Installation Commands
-
-If you prefer individual steps instead of the Quick Install above:
-
-```bash
-# Linux
-chmod +x dist/Jira\ Desktop-2.0.0.AppImage && ./dist/Jira\ Desktop-2.0.0.AppImage
-# Or: sudo dpkg -i dist/jira-desktop-app_2.0.0_amd64.deb
-# Or: sudo rpm -i dist/jira-desktop-app-2.0.0.x86_64.rpm
-
-# macOS 
-open dist/Jira\ Desktop-2.0.0.dmg
-# Then drag "Jira Desktop" to Applications folder
-
-# Windows
-msiexec /i dist/jira-desktop-app-2.0.0.msi
-```
-
-## ⌨️ Keyboard Shortcuts
+### Keyboard Shortcuts
 
 | Shortcut | Action |
 |----------|--------|
-| `Cmd+U` / `Ctrl+U` | Configure Jira URL |
-| `Cmd+Shift+D` / `Ctrl+Shift+D` | Toggle Dark Mode |
-| `Cmd+R` / `Ctrl+R` | Reload Page |
-| `Cmd+Shift+I` / `Ctrl+Shift+I` | Toggle Developer Tools |
-| `Cmd+Q` / `Ctrl+Q` | Quit Application |
+| `Ctrl+U` / `Cmd+U` | Configure Jira URL |
+| `Ctrl+Shift+D` / `Cmd+Shift+D` | Toggle Dark Mode |
+| `Ctrl+R` / `Cmd+R` | Reload Page |
+| `Ctrl+Shift+I` / `Cmd+Shift+I` | Toggle Developer Tools |
+| `Ctrl+Q` / `Cmd+Q` | Quit Application |
 
-## 📦 Building
+## Architecture
 
-### Development Build
+```text
+src/
+├── main/                      # Electron main process
+│   ├── main.ts               # Application entry point
+│   └── services/             # Core services
+│       ├── ContextMenuService.ts    # Right-click context menus
+│       ├── StorageService.ts        # Configuration persistence
+│       └── WindowManager.ts         # Window lifecycle management
+├── preload/                   # Secure bridge between main and renderer
+│   └── preload.ts            # Context-isolated API exposure
+└── renderer/                  # Frontend UI (development interface)
+    ├── index.html            # Development configuration interface
+    ├── style.css             # Styling with dark mode support
+    └── app.js               # Frontend application logic
+```
+
+## Technical Details
+
+- **Electron Version**: 32.3.3
+- **Build System**: Electron Vite + Electron Builder
+- **Supported Architectures**: x64 (Intel/AMD), ARM64 (Apple Silicon)
+- **Minimum OS Requirements**:
+  - Windows 10 or higher
+  - macOS 10.12 (Sierra) or higher
+  - Linux (most modern distributions)
+
+## Security Features
+
+- **Context Isolation**: Renderer process runs in a sandboxed environment
+- **Preload Security**: Controlled API exposure through secure preload scripts
+- **URL Validation**: Restricts navigation to Atlassian domains and configured URLs
+- **External Link Handling**: Safely opens external links in the default browser
+- **No Direct Node Access**: Renderer process cannot directly access Node.js APIs
+
+## Theme Support
+
+The application includes comprehensive dark mode support:
+
+- **System Detection**: Automatically follows system dark/light mode preferences
+- **Manual Override**: Toggle dark mode independently using keyboard shortcuts or menu
+- **Real-time Updates**: Theme changes apply immediately without restart
+- **Persistent Settings**: Theme preferences are saved and restored between sessions
+
+## Auto-Update System
+
+- **Automatic Checking**: Checks for updates on startup
+- **Manual Checking**: Available through application menu
+- **Background Downloads**: Updates download in the background
+- **User Control**: Users can choose when to install updates
+
+## Troubleshooting
+
+### Common Issues
+
+**Application won't start:**
+
 ```bash
+npm run clean
+npm install
 npm run build
 npm run preview
 ```
 
-### Production Distribution
-```bash
-# Build for current platform
-npm run dist
+**"Page Unavailable" on first launch:**
 
-# Build for all platforms
-npm run dist:all
-```
+This is expected behavior. Press `Ctrl+U` (or `Cmd+U` on macOS) to configure your Jira URL.
 
-## 🎨 Theme Support
+**macOS "App can't be opened" error:**
 
-The app includes native dark mode support:
+Right-click the application and select "Open" to bypass Gatekeeper on first launch.
 
-- **System Detection**: Automatically detects your system's dark/light mode preference
-- **Manual Toggle**: `Cmd/Ctrl + Shift + D` or via menu "Jira Desktop" → "Toggle Dark Mode"
-- **Real-time Updates**: Changes immediately when you toggle system theme
+**Linux AppImage won't run:**
 
-## 🔒 Security Features
-
-- **Context Isolation**: Renderer process is sandboxed with secure preload scripts
-- **External Links**: Safely opens external links in default browser
-- **URL Validation**: Only allows Atlassian domains and configured URLs
-- **No Node Access**: Renderer has no direct access to Node.js APIs
-
-## 📦 Installer Files You Get
-
-### Linux
-- `Jira Desktop-2.0.0.AppImage` - Portable app (no installation needed)
-- `jira-desktop-app_2.0.0_amd64.deb` - For Ubuntu/Debian
-- `jira-desktop-app-2.0.0.x86_64.rpm` - For RedHat/Fedora/SUSE
-- NPM package (coming soon for global installation)
-
-### macOS  
-- `Jira Desktop-2.0.0.dmg` - Drag-to-install disk image
-- Supports both Intel (x64) and Apple Silicon (arm64)
-
-### Windows
-- `jira-desktop-app-2.0.0.msi` - MSI installer package
-- Creates Start Menu shortcut with Jira icon
-
-## 🔄 Migration from Old Version
-
-This modernizes the previous Nativefier-based implementation with:
-
-- ✅ **Security**: Updated from Electron 10 → 32+
-- ✅ **Maintainability**: TypeScript + modern tooling
-- ✅ **Features**: Native menus, themes, auto-updates
-- ✅ **Cross-platform**: Proper multi-platform builds
-- ✅ **Performance**: Optimized bundle size
-
-## 🐛 Troubleshooting
+Ensure the file has execute permissions: `chmod +x "Jira Desktop-2.1.0.AppImage"`
 
 ### Development Issues
 
-```bash
-# Clear build cache
-npm run clean
+**Build failures:**
 
-# Reinstall dependencies
-rm -rf node_modules package-lock.json
-npm install
-```
+- Ensure Node.js 18+ is installed: `node --version`
+- Clear build cache: `npm run clean`
+- Reinstall dependencies: `rm -rf node_modules package-lock.json && npm install`
 
-### If Something Goes Wrong
+**Permission errors on Windows:**
 
-**Seeing "Page Unavailable"?** ✅ This is normal on first run
-1. Press `Cmd+U` (Mac) or `Ctrl+U` (Windows/Linux)
-2. Type: `yourcompany.atlassian.net` (replace with your company name)
-3. Click "Set URL"
+Run command prompt as administrator when building or installing.
 
-**App won't start?**
-```bash
-npm run clean
-npm install
-npm run build
-npm run preview
-```
+## Migration from Previous Versions
 
-**Still having issues?**
-- Ensure your Jira URL works in a regular web browser first
-- Check that Node.js 18+ is installed: `node --version`
+This version represents a complete modernization from the previous Nativefier-based implementation:
 
-## 📄 License
+- **Security**: Updated from Electron 10.1.6 to 32.3.3
+- **Build System**: Migrated from Nativefier to Electron Builder with TypeScript
+- **Features**: Added native menus, auto-updates, improved window management
+- **Cross-platform**: Proper multi-platform builds with platform-specific optimizations
+- **Maintainability**: Modern development stack with TypeScript and modular architecture
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature-name`
+3. Make your changes and test thoroughly
+4. Commit with clear, descriptive messages
+5. Push to your fork and submit a pull request
+
+### Development Guidelines
+
+- Follow TypeScript best practices
+- Maintain security isolation between main and renderer processes
+- Test on multiple platforms when possible
+- Update documentation for any new features or changes
+
+## License
 
 ISC License - See LICENSE file for details.
 
----
+## Support
 
-**Previous Version**: Used deprecated Nativefier (Electron 10.1.6)  
-**Current Version**: Modern Electron 32+ with TypeScript and Electron Builder
+- **Issues**: Report bugs and feature requests on [GitHub Issues](https://github.com/JoshWay/jira-desktop/issues)
+- **Documentation**: Additional documentation available in the project wiki
+- **Security**: Report security vulnerabilities privately through GitHub security advisories
