@@ -33,10 +33,11 @@ class JiraApp {
       }
     })
 
-    // Handle external links
+    // Handle external links and navigation
     app.on('web-contents-created', (_, contents) => {
+      // Handle new window creation (target="_blank" links)
       contents.setWindowOpenHandler(({ url }) => {
-        if (url.includes('atlassian.net') || url.startsWith(this.jiraUrl)) {
+        if (this.isAtlassianUrl(url)) {
           // Navigate in current window instead of opening new window
           if (this.mainWindow && !this.mainWindow.isDestroyed()) {
             this.mainWindow.loadURL(url)
@@ -45,6 +46,23 @@ class JiraApp {
         }
         shell.openExternal(url)
         return { action: 'deny' }
+      })
+
+      // Handle navigation within the same window (including dropdown menu clicks)
+      contents.on('will-navigate', (event, navigationUrl) => {
+        const currentUrl = contents.getURL()
+        
+        // Allow navigation within Atlassian domains
+        if (this.isAtlassianUrl(navigationUrl)) {
+          // Allow the navigation to proceed within the app
+          return
+        }
+        
+        // For non-Atlassian URLs, prevent navigation and open externally
+        if (!this.isAtlassianUrl(currentUrl) || !this.isAtlassianUrl(navigationUrl)) {
+          event.preventDefault()
+          shell.openExternal(navigationUrl)
+        }
       })
     })
   }
@@ -86,6 +104,25 @@ class JiraApp {
 
     // Load Jira directly - just like the original Nativefier approach
     this.mainWindow.loadURL(this.jiraUrl)
+  }
+
+  private isAtlassianUrl(url: string): boolean {
+    try {
+      const parsedUrl = new URL(url)
+      const hostname = parsedUrl.hostname.toLowerCase()
+      
+      // Allow all Atlassian services to stay within the app
+      return (
+        hostname.includes('atlassian.net') ||
+        hostname.includes('atlassian.com') ||
+        hostname.includes('bitbucket.org') ||
+        hostname.includes('trello.com') ||
+        hostname === 'id.atlassian.com' ||
+        url.startsWith(this.jiraUrl)
+      )
+    } catch {
+      return false
+    }
   }
 
   private setupMenu(): void {
