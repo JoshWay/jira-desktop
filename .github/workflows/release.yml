@@ -36,7 +36,7 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         
-    - name: Upload artifacts (Ubuntu)
+    - name: Upload artifacts (Debian)
       if: matrix.os == 'ubuntu-latest'
       uses: actions/upload-artifact@v4
       with:
