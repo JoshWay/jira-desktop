@@ -1,13 +1,19 @@
 import { app, BrowserWindow, Menu, nativeTheme, ipcMain, shell, dialog } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { join } from 'path'
+import { WindowManager } from './services/WindowManager'
+import { ContextMenuService } from './services/ContextMenuService'
 
 class JiraApp {
   private mainWindow: BrowserWindow | null = null
   private jiraUrl: string = 'https://id.atlassian.com/login'
   private manualUpdateCheck: boolean = false
+  private windowManager: WindowManager
+  private contextMenuService: ContextMenuService
 
   constructor() {
+    this.windowManager = new WindowManager()
+    this.contextMenuService = new ContextMenuService(this.windowManager)
     this.initializeApp()
     this.setupAutoUpdater()
   }
@@ -29,14 +35,21 @@ class JiraApp {
     // Quit when all windows are closed
     app.on('window-all-closed', () => {
       if (process.platform !== 'darwin') {
+        this.windowManager.closeAllWindows()
         app.quit()
       }
     })
 
-    // Handle external links
+    // Handle app termination
+    app.on('before-quit', () => {
+      this.windowManager.closeAllWindows()
+    })
+
+    // Handle external links and navigation
     app.on('web-contents-created', (_, contents) => {
+      // Handle new window creation (target="_blank" links)
       contents.setWindowOpenHandler(({ url }) => {
-        if (url.includes('atlassian.net') || url.startsWith(this.jiraUrl)) {
+        if (this.isAtlassianUrl(url)) {
           // Navigate in current window instead of opening new window
           if (this.mainWindow && !this.mainWindow.isDestroyed()) {
             this.mainWindow.loadURL(url)
@@ -45,6 +58,23 @@ class JiraApp {
         }
         shell.openExternal(url)
         return { action: 'deny' }
+      })
+
+      // Handle navigation within the same window (including dropdown menu clicks)
+      contents.on('will-navigate', (event, navigationUrl) => {
+        const currentUrl = contents.getURL()
+        
+        // Allow navigation within Atlassian domains
+        if (this.isAtlassianUrl(navigationUrl)) {
+          // Allow the navigation to proceed within the app
+          return
+        }
+        
+        // For non-Atlassian URLs, prevent navigation and open externally
+        if (!this.isAtlassianUrl(currentUrl) || !this.isAtlassianUrl(navigationUrl)) {
+          event.preventDefault()
+          shell.openExternal(navigationUrl)
+        }
       })
     })
   }
@@ -77,6 +107,9 @@ class JiraApp {
       this.mainWindow = null
     })
 
+    // Setup context menu for the main window
+    this.contextMenuService.setupForWindow(this.mainWindow)
+
     // Load Jira directly
     this.loadJiraApp()
   }
@@ -86,6 +119,25 @@ class JiraApp {
 
     // Load Jira directly - just like the original Nativefier approach
     this.mainWindow.loadURL(this.jiraUrl)
+  }
+
+  private isAtlassianUrl(url: string): boolean {
+    try {
+      const parsedUrl = new URL(url)
+      const hostname = parsedUrl.hostname.toLowerCase()
+      
+      // Allow all Atlassian services to stay within the app
+      return (
+        hostname.includes('atlassian.net') ||
+        hostname.includes('atlassian.com') ||
+        hostname.includes('bitbucket.org') ||
+        hostname.includes('trello.com') ||
+        hostname === 'id.atlassian.com' ||
+        url.startsWith(this.jiraUrl)
+      )
+    } catch {
+      return false
+    }
   }
 
   private setupMenu(): void {
@@ -109,6 +161,17 @@ class JiraApp {
           {
             label: 'Check for Updates...',
             click: () => this.manualCheckForUpdates()
+          },
+          { type: 'separator' },
+          {
+            label: 'New Atlassian Window...',
+            accelerator: 'CmdOrCtrl+Shift+N',
+            click: () => this.promptForNewWindow()
+          },
+          {
+            label: 'Close All Windows',
+            accelerator: 'CmdOrCtrl+Shift+W',
+            click: () => this.windowManager.closeAllWindows()
           },
           { type: 'separator' },
           { role: 'hide' },
@@ -283,6 +346,136 @@ class JiraApp {
 
   private toggleDarkMode(): void {
     nativeTheme.themeSource = nativeTheme.shouldUseDarkColors ? 'light' : 'dark'
+  }
+
+  private async promptForNewWindow(): Promise<void> {
+    const promptWindow = new BrowserWindow({
+      width: 500,
+      height: 350,
+      resizable: false,
+      modal: false,
+      alwaysOnTop: true,
+      center: true,
+      webPreferences: {
+        nodeIntegration: true,
+        contextIsolation: false
+      }
+    })
+
+    const promptHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Open New Atlassian Window</title>
+      <style>
+        body { 
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+          padding: 30px;
+          margin: 0;
+          background: #f5f5f5;
+        }
+        .container {
+          background: white;
+          padding: 30px;
+          border-radius: 8px;
+          box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h2 { margin-top: 0; color: #333; }
+        label { display: block; margin-bottom: 8px; font-weight: 500; }
+        input, select { 
+          width: 100%; 
+          padding: 12px; 
+          border: 2px solid #ddd; 
+          border-radius: 6px; 
+          font-size: 14px;
+          margin-bottom: 15px;
+        }
+        input:focus, select:focus { outline: none; border-color: #0052cc; }
+        .checkbox-group { margin-bottom: 20px; }
+        .checkbox-group input[type="checkbox"] { width: auto; margin-right: 8px; }
+        .buttons { display: flex; gap: 10px; justify-content: flex-end; }
+        button {
+          padding: 10px 20px;
+          border: none;
+          border-radius: 6px;
+          font-size: 14px;
+          cursor: pointer;
+        }
+        .primary { background: #0052cc; color: white; }
+        .primary:hover { background: #0747a6; }
+        .secondary { background: #f4f5f7; color: #333; }
+        .secondary:hover { background: #e4e5ea; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h2>🚀 Open New Atlassian Window</h2>
+        <label for="url">Enter Atlassian URL:</label>
+        <input type="url" id="url" placeholder="https://your-company.atlassian.net/jira" autofocus>
+        <label for="product">Product Type:</label>
+        <select id="product">
+          <option value="auto">Auto-detect</option>
+          <option value="jira">Jira</option>
+          <option value="confluence">Confluence</option>
+          <option value="bitbucket">Bitbucket</option>
+          <option value="trello">Trello</option>
+        </select>
+        <div class="checkbox-group">
+          <label>
+            <input type="checkbox" id="background"> Open in background
+          </label>
+        </div>
+        <div class="buttons">
+          <button class="secondary" onclick="window.close()">Cancel</button>
+          <button class="primary" onclick="openWindow()">Open Window</button>
+        </div>
+      </div>
+      <script>
+        function openWindow() {
+          const url = document.getElementById('url').value.trim();
+          const product = document.getElementById('product').value;
+          const background = document.getElementById('background').checked;
+          
+          if (url) {
+            require('electron').ipcRenderer.send('open-new-window', { url, product, background });
+            window.close();
+          }
+        }
+        
+        document.getElementById('url').addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') openWindow();
+          if (e.key === 'Escape') window.close();
+        });
+      </script>
+    </body>
+    </html>`
+
+    promptWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(promptHtml)}`)
+    
+    // Handle new window creation
+    ipcMain.once('open-new-window', async (_, { url, product, background }) => {
+      let normalizedUrl = url
+      
+      // Normalize URL
+      if (!normalizedUrl.startsWith('http://') && !normalizedUrl.startsWith('https://')) {
+        normalizedUrl = 'https://' + normalizedUrl
+      }
+      
+      // Identify product if auto-detect, otherwise lookup by ID
+      const detectedProduct = product === 'auto' 
+        ? this.windowManager.identifyProduct(normalizedUrl)
+        : this.windowManager.getProductById(product)
+      
+      if (detectedProduct) {
+        await this.windowManager.createWindow({
+          url: normalizedUrl,
+          product: detectedProduct,
+          focused: !background
+        })
+      }
+      
+      promptWindow.close()
+    })
   }
 
   private setupAutoUpdater(): void {

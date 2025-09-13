@@ -11,6 +11,9 @@ const electronAPI = {
   // Jira URL management
   setJiraUrl: (url: string) => ipcRenderer.invoke('set-jira-url', url),
 
+  // Multi-window management
+  showContextMenu: (params: any) => ipcRenderer.invoke('show-context-menu', params),
+
   // System info
   platform: process.platform,
   versions: process.versions
