@@ -44,6 +44,10 @@ export interface E2EMainState {
   calls: Record<string, unknown[][]>
   // How often any window gained focus; must stay 0 unless JIRA_DESKTOP_E2E_HEADED=1
   windowFocusEvents: number
+  // Each window's bounds as its constructor placed them (by BrowserWindow id): at creation, or
+  // after the constructor's own last move, recorded before the harness moves it off-screen, so
+  // tests can check where the app asked it to open. Not recorded in headed runs.
+  createdBounds: Record<number, { x: number; y: number; width: number; height: number }>
   stub: (spec: StubSpec) => void
 }
 

@@ -3,7 +3,7 @@
 // shell.openExternal is the harness recorder, so nothing ever reaches the OS.
 import type { ElectronApplication, Page } from '@playwright/test'
 import { resolve } from 'node:path'
-import { expect, test } from './helpers/app'
+import { E2E_SITE_URL, expect, test } from './helpers/app'
 import type { LaunchedApp } from './helpers/app'
 import { DIALOG_PAGE, closeVia, openDialog } from './helpers/dialog'
 
@@ -18,7 +18,8 @@ declare global {
   var __securityE2E: { navigations: NavigationRecord[] } | undefined
 }
 
-const START_URL = 'https://id.atlassian.com/login'
+// The site every launch here is configured for (written to settings.json by the fixture)
+const START_URL = E2E_SITE_URL
 
 // Records every main-frame navigation/redirect on every contents (current and future), after the
 // app's own policy listener has run, so `prevented` is the policy's verdict.

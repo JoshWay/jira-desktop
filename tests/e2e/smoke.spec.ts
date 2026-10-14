@@ -1,9 +1,10 @@
-import { expect, test } from './helpers/app'
+import { E2E_SITE_URL, expect, test } from './helpers/app'
 
 test('launches, shows the main window and keeps all traffic local', async ({ launchApp }) => {
+  // Configured for E2E_SITE_URL (the fixture's default settings.json); first run is in startup.spec.ts
   const app = await launchApp()
   const page = await app.electronApp.firstWindow()
-  await expect(page).toHaveURL('https://id.atlassian.com/login')
+  await expect(page).toHaveURL(E2E_SITE_URL)
   await expect(page).toHaveTitle('E2E stub')
 
   // The app's ready-to-show -> show() still runs; the harness turns it into an inactive,
@@ -29,7 +30,7 @@ test('launches, shows the main window and keeps all traffic local', async ({ lau
   expect(paths).toEqual({ userData: app.userDataDir, sessionData: app.userDataDir })
 
   expect(await app.requests()).toContainEqual({
-    url: 'https://id.atlassian.com/login',
+    url: E2E_SITE_URL,
     method: 'GET',
     session: 'default',
     servedWith: 'stub-page'

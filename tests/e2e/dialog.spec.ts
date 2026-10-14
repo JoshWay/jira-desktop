@@ -1,11 +1,12 @@
 // The local dialog (Set Jira URL / New Atlassian Window), spec R2: a sandboxed local page with a
 // minimal preload, inert rendering of whatever it shows, inline validation, and IPC that answers
 // only the open dialog's own page. Offline through the harness; dialog.showErrorBox is a recorder.
-import { expect, test } from './helpers/app'
+import { E2E_SITE_URL, expect, test } from './helpers/app'
 import type { LaunchedApp } from './helpers/app'
 import { DIALOG_CHANNELS, DIALOG_PAGE, clickAppMenu, closeVia, openDialog } from './helpers/dialog'
 
-const START_URL = 'https://id.atlassian.com/login'
+// The site every launch here is configured for (written to settings.json by the fixture)
+const START_URL = E2E_SITE_URL
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
 
 // loadURL adds transient listeners to the main contents until the load settles (toHaveURL passes at

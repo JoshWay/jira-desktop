@@ -2,6 +2,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from './helpers/app'
+import { PLACEHOLDER_PAGE } from './helpers/dialog'
 
 // Persistent storage on a real launch (spec R3; unit coverage in tests/unit/StorageService.test.ts)
 
@@ -48,10 +49,13 @@ test('a corrupt settings file is quarantined and the app still starts', async ({
 
   const app = await launchApp({ userDataDir })
   const page = await app.electronApp.firstWindow()
-  await expect(page).toHaveTitle('E2E stub')
+  // No usable saved site: first-run setup, nothing remote loaded
+  await expect(page).toHaveURL(PLACEHOLDER_PAGE)
   await app.close()
+  expect(await app.requests()).toEqual([])
 
   expect(await readFile(join(userDataDir, 'settings.json.corrupt-1'), 'utf-8')).toBe('{"jiraUrl": "https://acme.atl')
-  // Nothing was set, so no new settings file was written
-  expect((await readdir(userDataDir)).includes('settings.json')).toBe(false)
+  // The fresh file (the main window's bounds are saved on quit) holds no site: nothing was set
+  const settings = JSON.parse(await readFile(join(userDataDir, 'settings.json'), 'utf-8')) as Record<string, unknown>
+  expect(settings.jiraUrl).toBeUndefined()
 })
