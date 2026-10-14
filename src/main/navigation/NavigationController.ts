@@ -141,11 +141,12 @@ export class NavigationController {
     if (url) clipboard.writeText(url)
   }
 
-  // Through the external-open policy (http/https/mailto only), on top of shareableUrl's http(s)
+  // Through the external-open policy (http/https/mailto only), on top of shareableUrl's http(s).
+  // A menu click is the user's own action, so it is exempt from the page-driven rate limit.
   // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
   private openInBrowser(win: BaseWindow | undefined): void {
     const url = this.currentUrl(win)
-    if (url) openExternalSafely(url)
+    if (url) openExternalSafely(url, { userInitiated: true })
   }
 
   private find(win: BaseWindow | undefined): void {

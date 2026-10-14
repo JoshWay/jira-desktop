@@ -429,6 +429,9 @@ test('Open in Browser hands an https page to the external-open policy, and never
     ['https://e2e.atlassian.net/browse/ONE-1'],
     ['https://e2e.atlassian.net/browse/TWO-2?focused=1']
   ])
+  // A user's own clicks are never throttled by the page-driven rate limit (burst 3)
+  for (let i = 0; i < 4; i++) await clickMenuIn(app, ['Go', 'Open in Browser'], mainId)
+  await expect.poll(async () => (await app.stubCalls('shell', 'openExternal')).length).toBe(6)
   expect(await app.stubCalls('permission', 'openExternal')).toEqual([])
 })
 
