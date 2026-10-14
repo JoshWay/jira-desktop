@@ -5,7 +5,7 @@
 // codex:run npm run test:e2e -- tests/e2e/security.spec.ts
 import { app, session, shell } from 'electron'
 import type { Event, Session, WebContents, WebPreferences } from 'electron'
-import { LocalPageRegistry, decideNavigation, decideWindowOpen, isPermissionAllowed, toExternalHref } from './navigationPolicy'
+import { LocalPageRegistry, decideNavigation, decideWindowOpen, hasPrivilegedPrefs, isExpectedLoadAbort, isPermissionAllowed, toExternalHref } from './navigationPolicy'
 import type { PolicyContext } from './navigationPolicy'
 
 // App-owned pages (Task 5 dialogs, the dev server). Empty until something registers.
@@ -34,8 +34,9 @@ const AUTH_POPUP_WEB_PREFERENCES: WebPreferences = Object.freeze({
   webviewTag: false
 })
 
-// Contents that hold any privilege (a preload, Node, no sandbox or no isolation), or show a local
-// page, may never load remote content. Unknown prefs fail closed.
+// Contents that hold any privilege (see hasPrivilegedPrefs), or show a local page, may never load
+// remote content. Unknown prefs fail closed.
+// codex:run npm test -- tests/unit/navigationPolicy.test.ts
 // TODO(Task 5): the data: prompt windows (nodeIntegration: true) are confined by this rule; they
 // never navigate, so nothing else is needed until they are replaced.
 // getLastWebPreferences is undocumented (Electron's own window.open inheritance uses it), hence
@@ -43,11 +44,14 @@ const AUTH_POPUP_WEB_PREFERENCES: WebPreferences = Object.freeze({
 type WithPrefs = WebContents & { getLastWebPreferences?: () => WebPreferences | null }
 
 function isConfined(contents: WebContents): boolean {
-  const prefs = (contents as WithPrefs).getLastWebPreferences?.()
-  if (!prefs) return true
-  if (prefs.preload || prefs.nodeIntegration || prefs.nodeIntegrationInSubFrames) return true
-  if (prefs.sandbox === false || prefs.contextIsolation === false) return true
+  if (hasPrivilegedPrefs((contents as WithPrefs).getLastWebPreferences?.())) return true
   return localPages.matches(contents.getURL())
+}
+
+// codex:run npm test -- tests/unit/navigationPolicy.test.ts
+function logLoadFailure(error: unknown): void {
+  if (isExpectedLoadAbort(error)) return
+  console.error('in-app window.open load failed:', error)
 }
 
 function applyContentsPolicy(contents: WebContents, getConfiguredSiteUrl: () => string | undefined): void {
@@ -59,7 +63,7 @@ function applyContentsPolicy(contents: WebContents, getConfiguredSiteUrl: () => 
       case 'load-in-opener':
         // Current UX: in-app links that ask for a new window open in the window that asked
         setImmediate(() => {
-          if (!contents.isDestroyed()) contents.loadURL(url).catch(() => {})
+          if (!contents.isDestroyed()) contents.loadURL(url).catch(logLoadFailure)
         })
         return { action: 'deny' }
       case 'auth-popup':

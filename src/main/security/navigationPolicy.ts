@@ -22,6 +22,33 @@ function parse(url: string): URL | null {
   }
 }
 
+// The subset of Electron's WebPreferences that grants a contents privilege
+export interface PrivilegePrefs {
+  preload?: string
+  nodeIntegration?: boolean
+  nodeIntegrationInSubFrames?: boolean
+  nodeIntegrationInWorker?: boolean
+  webviewTag?: boolean
+  sandbox?: boolean
+  contextIsolation?: boolean
+}
+
+// True when prefs give the page anything beyond a plain sandboxed, isolated renderer: a preload,
+// Node in any context, <webview>, no sandbox or no isolation. Missing prefs count as privileged.
+export function hasPrivilegedPrefs(prefs: PrivilegePrefs | null | undefined): boolean {
+  if (!prefs) return true
+  if (prefs.preload || prefs.nodeIntegration || prefs.nodeIntegrationInSubFrames || prefs.nodeIntegrationInWorker) return true
+  if (prefs.webviewTag === true) return true
+  return prefs.sandbox === false || prefs.contextIsolation === false
+}
+
+// A loadURL rejection with ERR_ABORTED means the load was cancelled (superseded or stopped), which
+// is expected; any other rejection is a real failure. (On Electron 44 a redirect the policy
+// prevents resolves loadURL rather than rejecting.)
+export function isExpectedLoadAbort(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === 'ERR_ABORTED'
+}
+
 // The identity of an app-owned page: exact origin for http(s) (the dev server), exact path for
 // file: (packaged builds). Query and hash never matter. Anything else cannot be a local page.
 export function localPageKey(url: string): string | null {

@@ -4,6 +4,8 @@ import {
   LocalPageRegistry,
   decideNavigation,
   decideWindowOpen,
+  hasPrivilegedPrefs,
+  isExpectedLoadAbort,
   isPermissionAllowed,
   localPageKey,
   toExternalHref
@@ -15,6 +17,41 @@ function ctx(local: string[] = [], siteUrl?: string): PolicyContext {
   for (const url of local) registry.register(url)
   return { siteUrl, isLocalPage: (url) => registry.matches(url) }
 }
+
+describe('hasPrivilegedPrefs', () => {
+  const plain = { sandbox: true, contextIsolation: true, nodeIntegration: false, nodeIntegrationInSubFrames: false, nodeIntegrationInWorker: false, webviewTag: false }
+  it('is false for a plain sandboxed, isolated renderer (as Electron reports it)', () => {
+    expect(hasPrivilegedPrefs(plain)).toBe(false)
+    expect(hasPrivilegedPrefs({ ...plain, preload: '' })).toBe(false)
+  })
+  it('is true for every privilege-granting pref', () => {
+    for (const extra of [
+      { preload: '/x/preload.js' },
+      { nodeIntegration: true },
+      { nodeIntegrationInSubFrames: true },
+      { nodeIntegrationInWorker: true },
+      { webviewTag: true },
+      { sandbox: false },
+      { contextIsolation: false }
+    ]) {
+      expect(hasPrivilegedPrefs({ ...plain, ...extra }), JSON.stringify(extra)).toBe(true)
+    }
+  })
+  it('fails closed when prefs are unknown', () => {
+    expect(hasPrivilegedPrefs(null)).toBe(true)
+    expect(hasPrivilegedPrefs(undefined)).toBe(true)
+  })
+})
+
+describe('isExpectedLoadAbort', () => {
+  it('is true only for ERR_ABORTED', () => {
+    expect(isExpectedLoadAbort(Object.assign(new Error('ERR_ABORTED (-3) loading x'), { code: 'ERR_ABORTED', errno: -3 }))).toBe(true)
+    expect(isExpectedLoadAbort(Object.assign(new Error('ERR_FAILED (-2) loading x'), { code: 'ERR_FAILED', errno: -2 }))).toBe(false)
+    expect(isExpectedLoadAbort(new Error('ERR_ABORTED'))).toBe(false)
+    expect(isExpectedLoadAbort(null)).toBe(false)
+    expect(isExpectedLoadAbort(undefined)).toBe(false)
+  })
+})
 
 describe('localPageKey', () => {
   it('uses the exact origin for http(s)', () => {

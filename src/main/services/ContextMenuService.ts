@@ -14,9 +14,12 @@ export interface ContextMenuParams {
 
 export class ContextMenuService {
   private windowManager: WindowManager
+  private getConfiguredSiteUrl: () => string | undefined
 
-  constructor(windowManager: WindowManager) {
+  // getConfiguredSiteUrl: the same getter the webContents policy uses, so the user's own site counts as in-app
+  constructor(windowManager: WindowManager, getConfiguredSiteUrl: () => string | undefined) {
     this.windowManager = windowManager
+    this.getConfiguredSiteUrl = getConfiguredSiteUrl
   }
 
   public setupForWindow(window: BrowserWindow): void {
@@ -79,8 +82,8 @@ export class ContextMenuService {
     }
 
     // Add separator if we have standard items and will add Atlassian items
-    // codex:run npm run test:e2e -- tests/e2e/security.spec.ts
-    const inAppLink = !!params.linkURL && isInAppUrl(params.linkURL)
+    // codex:run npm test -- tests/unit/ContextMenuService.test.ts
+    const inAppLink = !!params.linkURL && isInAppUrl(params.linkURL, this.getConfiguredSiteUrl())
     if (menuItems.length > 0 && inAppLink) {
       menuItems.push(new MenuItem({ type: 'separator' }))
     }

@@ -188,6 +188,26 @@ test('navigation within the app and to auth hosts is allowed; redirects are gove
   expect((await app.requests()).map((r) => r.url)).not.toContain('https://evil.test/landing')
 })
 
+test('an in-app window.open that redirects off-site is governed even though main loads it', async ({ launchApp }) => {
+  const app = await launchApp({
+    routes: [{ url: 'https://team.atlassian.net/out', response: { status: 302, headers: { location: 'https://evil.test/opener' }, body: 'moved' } }]
+  })
+  const page = await app.electronApp.firstWindow()
+  await expect(page).toHaveURL(START_URL)
+  await watchNavigations(app)
+
+  // load-in-opener is a main-initiated loadURL (no will-navigate); the redirect must still be caught
+  expect(await page.evaluate(() => window.open('https://team.atlassian.net/out') === null)).toBe(true)
+  await expect.poll(async () => (await navigations(app)).find((n) => n.url === 'https://evil.test/opener')).toEqual({
+    event: 'will-redirect',
+    url: 'https://evil.test/opener',
+    prevented: true
+  })
+  await expect.poll(() => app.stubCalls('shell', 'openExternal')).toEqual([['https://evil.test/opener']])
+  expect(page.url()).toBe(START_URL)
+  expect((await app.requests()).map((r) => r.url)).not.toContain('https://evil.test/opener')
+})
+
 test('window.open: auth opens a sandboxed child under the same policy; smb: creates nothing and calls nothing', async ({ launchApp }) => {
   const app = await launchApp()
   const page = await app.electronApp.firstWindow()
@@ -251,6 +271,25 @@ test('permissions: in-app content gets notifications but not media; other origin
   await expect(page).toHaveURL('https://accounts.google.com/signin')
   expect(await page.evaluate(() => Notification.requestPermission())).toBe('denied')
   expect(await page.evaluate(() => navigator.permissions.query({ name: 'notifications' }).then((s) => s.state))).toBe('denied')
+})
+
+test('permissions: a subframe navigating to an unsafe scheme is refused by the app itself', async ({ launchApp }) => {
+  const app = await launchApp()
+  const page = await app.electronApp.firstWindow()
+  await expect(page).toHaveURL(START_URL)
+
+  // Subframe navigations skip the main-frame guard, so only the app's openExternal permission
+  // denial stands between them and the OS. The frame is in-app, so an allow-list slip would grant.
+  await page.evaluate(() => new Promise<void>((done) => {
+    const frame = document.createElement('iframe')
+    frame.src = 'https://id.atlassian.com/frame'
+    frame.onload = () => done()
+    document.body.append(frame)
+  }))
+  await page.evaluate(() => { document.querySelector('iframe')!.contentWindow!.location.href = 'smb://x/y' })
+  await expect.poll(() => app.stubCalls('permission', 'openExternal')).toEqual([['smb://x/y', false]])
+  expect(await app.stubCalls('shell', 'openExternal')).toEqual([])
+  expect(page.url()).toBe(START_URL)
 })
 
 test('<webview> attachment is always prevented', async ({ launchApp }) => {

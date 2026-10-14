@@ -131,20 +131,26 @@ function respond(request: Request, ses: Session): Response {
 
 // A navigation to a scheme Chromium cannot load goes straight to the OS once the session grants
 // the 'openExternal' permission (Electron grants it when no handler is set), bypassing the
-// shell.openExternal recorder. So every session refuses it before any app handler sees it, and
-// records the URL; read it with stubCalls('permission', 'openExternal').
+// shell.openExternal recorder. So on every session that grant is always refused. The app's own
+// handler still decides first, and its verdict is recorded with the URL as [externalURL, granted]
+// (granted is true when no handler is set, Electron's default); read it with
+// stubCalls('permission', 'openExternal').
 function guardExternalProtocols(ses: Session): void {
   type Handler = Parameters<Session['setPermissionRequestHandler']>[0]
   const setHandler = ses.setPermissionRequestHandler.bind(ses)
   const wrap = (handler: Handler): NonNullable<Handler> => (contents, permission, callback, details) => {
-    if (permission === 'openExternal') {
-      const calls = (state.calls['permission.openExternal'] ??= [])
-      calls.push(['externalURL' in details ? details.externalURL : undefined])
-      callback(false)
+    if (permission !== 'openExternal') {
+      if (handler) handler(contents, permission, callback, details)
+      else callback(true)
       return
     }
-    if (handler) handler(contents, permission, callback, details)
-    else callback(true)
+    const externalURL = 'externalURL' in details ? details.externalURL : undefined
+    const refuse = (appGranted: boolean): void => {
+      ;(state.calls['permission.openExternal'] ??= []).push([externalURL, appGranted])
+      callback(false)
+    }
+    if (handler) handler(contents, permission, refuse, details)
+    else refuse(true)
   }
   ses.setPermissionRequestHandler = (handler) => setHandler(wrap(handler))
   setHandler(wrap(null))

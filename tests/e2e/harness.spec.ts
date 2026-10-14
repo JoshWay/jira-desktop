@@ -83,7 +83,9 @@ test('refuses and records Chromium\'s own OS protocol hand-off, whatever handler
     session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(true))
   })
   await page.evaluate(() => { window.location.href = 'jira-desktop-e2e-probe://x/y' })
-  await expect.poll(() => app.stubCalls('permission', 'openExternal')).toEqual([['jira-desktop-e2e-probe://x/y']])
+  // Recorded with the app handler's verdict (granted), and refused regardless
+  await expect.poll(() => app.stubCalls('permission', 'openExternal')).toEqual([['jira-desktop-e2e-probe://x/y', true]])
+  expect(page.url()).toBe('https://id.atlassian.com/login')
   // Other permissions still reach the app's handler
   expect(await page.evaluate(() => Notification.requestPermission())).toBe('granted')
 })

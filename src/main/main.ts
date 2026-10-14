@@ -14,7 +14,7 @@ class JiraApp {
 
   constructor() {
     this.windowManager = new WindowManager()
-    this.contextMenuService = new ContextMenuService(this.windowManager)
+    this.contextMenuService = new ContextMenuService(this.windowManager, () => this.jiraUrl)
     this.initializeApp()
     this.setupAutoUpdater()
   }
