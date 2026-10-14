@@ -1,6 +1,6 @@
 import { test as base, expect, _electron } from '@playwright/test'
 import type { ElectronApplication } from '@playwright/test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import type { Server, Socket } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -126,7 +126,26 @@ export class LaunchedApp {
   }
 }
 
+// On Linux, Electron spell-checks with Hunspell and downloads the locale's dictionary from
+// redirector.gvt1.com as the profile loads, before any main-process hook can turn it off. Seed
+// the Chromium profile (userData/Preferences) with spell-checking off and no dictionaries, so the
+// escape sink stays strict for everything else. Merges into a profile a previous launch wrote.
+// codex:run npm run test:e2e -- tests/e2e/harness.spec.ts
+async function seedChromiumPrefs(userDataDir: string): Promise<void> {
+  const file = join(userDataDir, 'Preferences')
+  let prefs: Record<string, any> = {}
+  try {
+    prefs = JSON.parse(await readFile(file, 'utf8'))
+  } catch {
+    // first launch on this profile
+  }
+  prefs.browser = { ...prefs.browser, enable_spellchecking: false }
+  prefs.spellcheck = { ...prefs.spellcheck, dictionaries: [] }
+  await writeFile(file, JSON.stringify(prefs))
+}
+
 async function launch(sink: EscapeSink, userDataDir: string, opts: LaunchOptions): Promise<LaunchedApp> {
+  await seedChromiumPrefs(userDataDir)
   const electronApp = await _electron.launch({
     // `-r` runs the interceptor in the main process before the app's main module loads
     args: ['-r', interceptModule, repoRoot],
