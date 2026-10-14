@@ -27,11 +27,24 @@ export interface EscapedRequest {
   requestLine: string
 }
 
+// Replaces electron[module][method] in the main process with a recorder returning `returnValue`
+// (wrapped in a resolved Promise when `async`). E.g. { module: 'dialog', method: 'showMessageBox',
+// returnValue: { response: 1, checkboxChecked: false }, async: true }
+export interface StubSpec {
+  module: string
+  method: string
+  returnValue?: unknown
+  async?: boolean
+}
+
 export interface E2EMainState {
   requests: InterceptedRequest[]
   routes: Route[]
-  // Recorded arguments of main-process functions replaced via stubMain(), keyed 'module.method'
+  // Recorded arguments of stubbed main-process functions, keyed 'module.method'
   calls: Record<string, unknown[][]>
+  // How often any window gained focus; must stay 0 unless JIRA_DESKTOP_E2E_HEADED=1
+  windowFocusEvents: number
+  stub: (spec: StubSpec) => void
 }
 
 declare global {

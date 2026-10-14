@@ -5,9 +5,9 @@ import { createServer } from 'node:net'
 import type { Server, Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import type { EscapedRequest, InterceptedRequest, Route } from './types'
+import type { EscapedRequest, InterceptedRequest, Route, StubSpec } from './types'
 
-export type { EscapedRequest, InterceptedRequest, Route, RouteResponse } from './types'
+export type { EscapedRequest, InterceptedRequest, Route, RouteResponse, StubSpec } from './types'
 export { expect }
 
 const repoRoot = resolve(__dirname, '../../..')
@@ -68,13 +68,17 @@ export interface LaunchOptions {
   userDataDir?: string
   // Routes the interceptor serves from the first request on; see Route in types.ts
   routes?: Route[]
+  // Main-process stubs applied before the app's main module runs, on top of the defaults
+  // (shell.openExternal, shell.openPath, dialog.showErrorBox are always recorders)
+  stubs?: StubSpec[]
   env?: Record<string, string>
 }
 
 export class LaunchedApp {
   readonly electronApp: ElectronApplication
   readonly userDataDir: string
-  private finalRequests: InterceptedRequest[] | null = null
+  // Snapshot of main-process state taken at close(), so it stays readable afterwards
+  private final: { requests: InterceptedRequest[]; windowFocusEvents: number } | null = null
 
   constructor(electronApp: ElectronApplication, userDataDir: string) {
     this.electronApp = electronApp
@@ -83,8 +87,14 @@ export class LaunchedApp {
 
   // Every http/https request the interceptor has served, in order
   async requests(): Promise<InterceptedRequest[]> {
-    if (this.finalRequests) return this.finalRequests
+    if (this.final) return this.final.requests
     return this.electronApp.evaluate(() => globalThis.__jiraDesktopE2E!.requests)
+  }
+
+  // How often any window gained focus (the launchApp fixture requires 0 unless headed)
+  async windowFocusEvents(): Promise<number> {
+    if (this.final) return this.final.windowFocusEvents
+    return this.electronApp.evaluate(() => globalThis.__jiraDesktopE2E!.windowFocusEvents)
   }
 
   // Replaces the route table for subsequent requests
@@ -94,21 +104,13 @@ export class LaunchedApp {
     }, routes)
   }
 
-  // Replaces electron[moduleName][method] in the main process with a recorder that returns
-  // `returnValue` (wrapped in a Promise when `async`). Read the calls back with stubCalls().
-  async stubMain(moduleName: string, method: string, returnValue?: unknown, opts: { async?: boolean } = {}): Promise<void> {
-    await this.electronApp.evaluate((electron, args) => {
-      const state = globalThis.__jiraDesktopE2E!
-      const key = `${args.moduleName}.${args.method}`
-      const target = (electron as unknown as Record<string, Record<string, unknown>>)[args.moduleName]
-      state.calls[key] = []
-      target[args.method] = (...callArgs: unknown[]) => {
-        state.calls[key].push(callArgs)
-        return args.async ? Promise.resolve(args.returnValue) : args.returnValue
-      }
-    }, { moduleName, method, returnValue, async: opts.async ?? false })
+  // Stubs a main-process function after launch (see StubSpec); use LaunchOptions.stubs for
+  // anything the app may call during startup
+  async stubMain(spec: StubSpec): Promise<void> {
+    await this.electronApp.evaluate((_, next) => globalThis.__jiraDesktopE2E!.stub(next), spec)
   }
 
+  // Arguments of every call to a stubbed function (defaults included)
   async stubCalls(moduleName: string, method: string): Promise<unknown[][]> {
     const key = `${moduleName}.${method}`
     return this.electronApp.evaluate((_, k) => globalThis.__jiraDesktopE2E!.calls[k] ?? [], key)
@@ -116,8 +118,10 @@ export class LaunchedApp {
 
   // Quits the app, keeping the request log readable afterwards. Safe to call twice.
   async close(): Promise<void> {
-    if (this.finalRequests) return
-    this.finalRequests = await this.requests().catch(() => [])
+    if (this.final) return
+    this.final = await this.electronApp
+      .evaluate(() => ({ requests: globalThis.__jiraDesktopE2E!.requests, windowFocusEvents: globalThis.__jiraDesktopE2E!.windowFocusEvents }))
+      .catch(() => ({ requests: [], windowFocusEvents: 0 }))
     await this.electronApp.close()
   }
 }
@@ -133,7 +137,8 @@ async function launch(sink: EscapeSink, userDataDir: string, opts: LaunchOptions
       JIRA_DESKTOP_E2E: '1',
       JIRA_DESKTOP_USER_DATA_DIR: userDataDir,
       JIRA_DESKTOP_E2E_SINK_PORT: String(sink.port),
-      JIRA_DESKTOP_E2E_ROUTES: JSON.stringify(opts.routes ?? [])
+      JIRA_DESKTOP_E2E_ROUTES: JSON.stringify(opts.routes ?? []),
+      JIRA_DESKTOP_E2E_STUBS: JSON.stringify(opts.stubs ?? [])
     }
   })
   return new LaunchedApp(electronApp, userDataDir)
@@ -168,11 +173,17 @@ export const test = base.extend<Fixtures>({
       return app
     })
     const log: InterceptedRequest[][] = []
+    const focusEvents: number[] = []
     for (const app of launched) {
       await app.close()
       log.push(await app.requests())
+      focusEvents.push(await app.windowFocusEvents())
     }
     await testInfo.attach('intercepted-requests.json', { body: JSON.stringify(log, null, 2), contentType: 'application/json' })
+    await testInfo.attach('window-focus-events.json', { body: JSON.stringify(focusEvents), contentType: 'application/json' })
     for (const dir of ownedDirs) await rm(dir, { recursive: true, force: true })
+    if (process.env.JIRA_DESKTOP_E2E_HEADED !== '1') {
+      expect(focusEvents.every((count) => count === 0), `a window took focus (per launch: ${focusEvents})`).toBe(true)
+    }
   }
 })

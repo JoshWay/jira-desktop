@@ -5,11 +5,20 @@
 //   1. every session (default and partitions) answers http/https itself via protocol.handle,
 //      so no request served by the app's normal flow reaches the network stack;
 //   2. every session's proxy is the test's escape sink on loopback, so anything that still
-//      bypasses (1) lands in the sink, is recorded as escaped, and never leaves the machine.
-import { app, session } from 'electron'
+//      bypasses (1) lands in the sink, is recorded as escaped, and never leaves the machine;
+//   3. functions that hand work to the OS (opening the real browser or a file) or block on a
+//      modal are replaced with recorders before the app's code runs; see DEFAULT_STUBS.
+//
+// It also keeps runs off the user's screen (see stayOutOfTheWay): no Dock icon or menu-bar
+// takeover on macOS, windows are shown inactive, fully transparent, click-through and pushed
+// off-screen, and focus()/moveTop() do nothing. Windows really are shown (isVisible() is true),
+// so they are not background-throttled. Set JIRA_DESKTOP_E2E_HEADED=1 to get normal, visible,
+// focusable windows for debugging.
+import * as electron from 'electron'
+import { app, BrowserWindow, session } from 'electron'
 import type { Session } from 'electron'
 import { basename } from 'node:path'
-import type { E2EMainState, InterceptedRequest, Route, RouteResponse } from './types'
+import type { E2EMainState, InterceptedRequest, Route, RouteResponse, StubSpec } from './types'
 
 if (process.env.JIRA_DESKTOP_E2E !== '1') {
   throw new Error('intercept-main must only be loaded with JIRA_DESKTOP_E2E=1')
@@ -27,12 +36,66 @@ app.commandLine.appendSwitch('proxy-server', `http://127.0.0.1:${sinkPort}`)
 app.commandLine.appendSwitch('proxy-bypass-list', '<-loopback>')
 app.commandLine.appendSwitch('host-resolver-rules', 'MAP * ~NOTFOUND, EXCLUDE 127.0.0.1')
 
+const headed = process.env.JIRA_DESKTOP_E2E_HEADED === '1'
+
+function keepOffScreen(win: BrowserWindow): void {
+  if (win.isDestroyed()) return
+  // macOS clamps positions so a sliver stays on a display; opacity 0 + click-through hide that
+  win.setPosition(-32000, 32000)
+  win.setOpacity(0)
+  win.setIgnoreMouseEvents(true)
+}
+
+function stayOutOfTheWay(): void {
+  // Allowed before 'ready' (verified on Electron 44): no Dock icon, no menu bar, no activation
+  if (process.platform === 'darwin') app.setActivationPolicy('accessory')
+
+  const proto = BrowserWindow.prototype
+  proto.show = function (this: BrowserWindow) {
+    this.showInactive()
+    keepOffScreen(this)
+  }
+  proto.focus = function () {}
+  proto.moveTop = function () {}
+  // Windows constructed with the default show: true are already on screen by the time this fires
+  app.on('browser-window-created', (_, win) => keepOffScreen(win))
+}
+
+if (!headed) stayOutOfTheWay()
+
+// Always on: the real versions would open the user's browser or files (traffic the sink cannot
+// see) or block the main process on a modal until the test times out.
+const DEFAULT_STUBS: StubSpec[] = [
+  { module: 'shell', method: 'openExternal', async: true },
+  { module: 'shell', method: 'openPath', returnValue: '', async: true },
+  { module: 'dialog', method: 'showErrorBox' }
+]
+
 const state: E2EMainState = {
   requests: [],
   routes: JSON.parse(process.env.JIRA_DESKTOP_E2E_ROUTES ?? '[]') as Route[],
-  calls: {}
+  calls: {},
+  windowFocusEvents: 0,
+  stub
 }
 globalThis.__jiraDesktopE2E = state
+
+function stub(spec: StubSpec): void {
+  const target = (electron as unknown as Record<string, Record<string, unknown> | undefined>)[spec.module]
+  if (!target || typeof target[spec.method] !== 'function') {
+    throw new Error(`cannot stub electron.${spec.module}.${spec.method}: not a function`)
+  }
+  const key = `${spec.module}.${spec.method}`
+  const calls: unknown[][] = (state.calls[key] = [])
+  target[spec.method] = (...args: unknown[]) => {
+    calls.push(args)
+    return spec.async ? Promise.resolve(spec.returnValue) : spec.returnValue
+  }
+}
+
+// Launch-time stubs (LaunchOptions.stubs) are applied after the defaults so they can override them
+const launchStubs = JSON.parse(process.env.JIRA_DESKTOP_E2E_STUBS ?? '[]') as StubSpec[]
+for (const spec of [...DEFAULT_STUBS, ...launchStubs]) stub(spec)
 
 function findRoute(url: string): Route | undefined {
   return state.routes.find((route) =>
@@ -72,6 +135,10 @@ function intercept(ses: Session): void {
     ses.protocol.handle(scheme, (request) => respond(request, ses))
   }
 }
+
+app.on('browser-window-focus', () => {
+  state.windowFocusEvents++
+})
 
 // Partition sessions (e.g. WindowManager's) are created lazily; intercept them as they appear,
 // before any request can be made on them.

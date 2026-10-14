@@ -6,6 +6,8 @@ test('launches, shows the main window and keeps all traffic local', async ({ lau
   await expect(page).toHaveURL('https://id.atlassian.com/login')
   await expect(page).toHaveTitle('E2E stub')
 
+  // The app's ready-to-show -> show() still runs; the harness turns it into an inactive,
+  // transparent, off-screen show, so the window is shown without stealing the screen
   const mainWindow = await app.electronApp.browserWindow(page)
   await expect.poll(() => mainWindow.evaluate((win) => win.isVisible())).toBe(true)
 
