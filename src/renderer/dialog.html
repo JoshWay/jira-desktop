@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jira Desktop</title>
+  <link rel="stylesheet" href="./dialog.css">
+  <script type="module" src="./dialog.ts"></script>
+</head>
+<body>
+  <!-- All text and values are filled in by dialog.ts with textContent / value, never as markup -->
+  <form id="dialog-form" novalidate>
+    <h1 id="heading"></h1>
+    <label for="url" id="url-label"></label>
+    <input id="url" name="url" type="url" autocomplete="off" spellcheck="false" maxlength="2048" autofocus>
+
+    <div id="new-window-fields" hidden>
+      <label for="product">Product</label>
+      <select id="product" name="product">
+        <option value="auto">Auto-detect</option>
+        <option value="jira">Jira</option>
+        <option value="confluence">Confluence</option>
+        <option value="bitbucket">Bitbucket</option>
+        <option value="trello">Trello</option>
+      </select>
+      <label class="checkbox"><input id="background" name="background" type="checkbox"> Open in background</label>
+    </div>
+
+    <p id="error" role="alert" hidden></p>
+
+    <div class="buttons">
+      <button id="cancel" type="button">Cancel</button>
+      <button id="submit" type="submit" class="primary" disabled>OK</button>
+    </div>
+  </form>
+</body>
+</html>

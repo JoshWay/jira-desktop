@@ -72,6 +72,37 @@ test('replaces OS hand-offs and blocking dialogs with recorders by default', asy
   expect(await app.stubCalls('shell', 'openPath')).toEqual([['/nonexistent']])
 })
 
+test('refuses and records Chromium\'s own OS protocol hand-off, whatever handler the app sets', async ({ launchApp }) => {
+  const app = await launchApp()
+  const page = await app.electronApp.firstWindow()
+  await expect(page).toHaveURL('https://id.atlassian.com/login')
+  // Simulate a broken app: no navigation guard, and a permission handler that grants everything.
+  // The probe scheme is unregistered, so even a harness failure here opens nothing.
+  await app.electronApp.evaluate(({ BrowserWindow, session }) => {
+    BrowserWindow.getAllWindows()[0].webContents.removeAllListeners('will-navigate')
+    session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(true))
+  })
+  await page.evaluate(() => { window.location.href = 'jira-desktop-e2e-probe://x/y' })
+  // Recorded with the app handler's verdict (granted), and refused regardless
+  await expect.poll(() => app.stubCalls('permission', 'openExternal')).toEqual([['jira-desktop-e2e-probe://x/y', true]])
+  expect(page.url()).toBe('https://id.atlassian.com/login')
+  // Other permissions still reach the app's handler
+  expect(await page.evaluate(() => Notification.requestPermission())).toBe('granted')
+})
+
+// A media-permission regression must fail on fake devices, never reach the real microphone or a
+// macOS privacy prompt; and the fakes must not come with auto-accept, which bypasses the app's handler.
+// codex:run npm run test:e2e -- tests/e2e/harness.spec.ts
+test('capture devices are Chromium\'s fakes, without the auto-accepting fake UI', async ({ launchApp }) => {
+  const app = await launchApp()
+  await app.electronApp.firstWindow()
+  const switches = await app.electronApp.evaluate(({ app: electronApp }) => ({
+    fakeDevice: electronApp.commandLine.hasSwitch('use-fake-device-for-media-stream'),
+    fakeUi: electronApp.commandLine.hasSwitch('use-fake-ui-for-media-stream')
+  }))
+  expect(switches).toEqual({ fakeDevice: true, fakeUi: false })
+})
+
 test('applies launch-time stubs before the app starts, and stubs after launch', async ({ launchApp }) => {
   const app = await launchApp({
     stubs: [
@@ -137,12 +168,66 @@ test('keeps windows off the user\'s screen and out of focus', async ({ launchApp
   })
   expect(state).toEqual({ focused: false, focusedWindow: false, opacity: 0, x: expect.any(Number), dockVisible: false })
   expect(state.x).toBeLessThan(0)
-  // Rendering is not throttled: timers in the page keep firing at full rate
+  // Rendering is not background-throttled. Chromium's throttling caps a hidden page's timers at
+  // about 1Hz (one wake-up per second, far less once intensive), so a 10ms interval gets at most
+  // ~3 ticks in 2s; unthrottled it gets ~200. The bar sits at 5x the throttle cap rather than near
+  // full rate, so CPU contention (seen at ~7 ticks per 500ms under a fullscreen game) cannot fail
+  // it while throttling still does. Note: Playwright's Electron loader already passes
+  // --disable-background-timer-throttling, so this guards the harness against regressions that
+  // stop timers some other way (e.g. a frozen or never-shown page) as much as against throttling.
   const ticks = await page.evaluate(() => new Promise<number>((done) => {
     let count = 0
     const id = setInterval(() => count++, 10)
-    setTimeout(() => { clearInterval(id); done(count) }, 500)
+    setTimeout(() => { clearInterval(id); done(count) }, 2000)
   }))
-  expect(ticks).toBeGreaterThan(30)
+  expect(ticks).toBeGreaterThanOrEqual(10)
+  expect(await app.windowFocusEvents()).toBe(0)
+})
+
+test('windows shown at construction, and window.open children, can never take focus', async ({ launchApp }) => {
+  test.skip(process.env.JIRA_DESKTOP_E2E_HEADED === '1', 'headed runs show real windows')
+  const app = await launchApp()
+  const page = await app.electronApp.firstWindow()
+  await expect(page).toHaveURL('https://id.atlassian.com/login')
+
+  // The native show of a default show: true window happens after browser-window-created, and
+  // center: true is applied after it too; with another app frontmost that show used to make the
+  // window key. The fix is environment-independent to check: no window is ever focusable.
+  // The constructor also places the window itself after that event (center: true here; centring
+  // or cascading when no x/y is given), so it must still be off-screen when the constructor
+  // returns, i.e. it was already off-screen when the native show put it up, and it must stay there.
+  const constructed = await app.electronApp.evaluate(async ({ BrowserWindow }) => {
+    const win = new BrowserWindow({ width: 300, height: 200, center: true })
+    const atReturn = { visible: win.isVisible(), x: win.getPosition()[0] }
+    await new Promise((done) => setTimeout(done, 300))
+    return { atReturn, visible: win.isVisible(), focusable: win.isFocusable(), focused: win.isFocused(), x: win.getPosition()[0] }
+  })
+  expect(constructed).toEqual({
+    atReturn: { visible: true, x: expect.any(Number) },
+    visible: true,
+    focusable: false,
+    focused: false,
+    x: expect.any(Number)
+  })
+  expect(constructed.atReturn.x).toBeLessThan(0)
+  expect(constructed.x).toBeLessThan(0)
+
+  // A window.open child is constructed by Electron itself, not through the app's code
+  const childOpened = app.electronApp.waitForEvent('window')
+  await page.evaluate(() => { window.open('https://accounts.google.com/harness') })
+  const child = await childOpened
+  await expect(child).toHaveURL('https://accounts.google.com/harness')
+  const opened = await app.electronApp.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL() === 'https://accounts.google.com/harness')!
+    return { visible: win.isVisible(), focusable: win.isFocusable(), focused: win.isFocused(), x: win.getPosition()[0] }
+  })
+  expect(opened).toEqual({ visible: true, focusable: false, focused: false, x: expect.any(Number) })
+  expect(opened.x).toBeLessThan(0)
+
+  // Closing windows must not hand focus to the rest
+  await app.electronApp.evaluate(({ BrowserWindow }) => {
+    for (const win of BrowserWindow.getAllWindows().slice(0, -1)) win.close()
+  })
+  await expect.poll(() => app.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1)
   expect(await app.windowFocusEvents()).toBe(0)
 })

@@ -12,12 +12,13 @@ export default defineConfig({
       }
     }
   },
+  // Per-window preloads for local pages only (sandboxed, so each is one self-contained CJS file)
   preload: {
     build: {
       outDir: 'dist/preload',
       rollupOptions: {
         input: {
-          index: resolve(__dirname, 'src/preload/preload.ts')
+          dialog: resolve(__dirname, 'src/preload/dialog.ts')
         }
       }
     }
@@ -28,7 +29,7 @@ export default defineConfig({
       outDir: 'dist/renderer',
       rollupOptions: {
         input: {
-          index: resolve(__dirname, 'src/renderer/index.html')
+          dialog: resolve(__dirname, 'src/renderer/dialog.html')
         }
       }
     }

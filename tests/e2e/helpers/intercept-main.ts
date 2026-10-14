@@ -7,13 +7,15 @@
 //   2. every session's proxy is the test's escape sink on loopback, so anything that still
 //      bypasses (1) lands in the sink, is recorded as escaped, and never leaves the machine;
 //   3. functions that hand work to the OS (opening the real browser or a file) or block on a
-//      modal are replaced with recorders before the app's code runs; see DEFAULT_STUBS.
+//      modal are replaced with recorders before the app's code runs; see DEFAULT_STUBS;
+//   4. Chromium's own OS hand-off for schemes it cannot load (smb:, vscode:, ...) is refused on
+//      every session whatever permission handler the app installs; see guardExternalProtocols.
 //
 // It also keeps runs off the user's screen (see stayOutOfTheWay): no Dock icon or menu-bar
-// takeover on macOS, windows are shown inactive, fully transparent, click-through and pushed
-// off-screen, and focus()/moveTop() do nothing. Windows really are shown (isVisible() is true),
-// so they are not background-throttled. Set JIRA_DESKTOP_E2E_HEADED=1 to get normal, visible,
-// focusable windows for debugging.
+// takeover on macOS, every window is made unable to take focus the moment it is created, shown
+// inactive, fully transparent, click-through and pushed off-screen, and focus()/moveTop() do
+// nothing. Windows really are shown (isVisible() is true), so they are not background-throttled.
+// Set JIRA_DESKTOP_E2E_HEADED=1 to get normal, visible, focusable windows for debugging.
 import * as electron from 'electron'
 import { app, BrowserWindow, session } from 'electron'
 import type { Session } from 'electron'
@@ -35,6 +37,11 @@ if (!Number.isInteger(sinkPort) || sinkPort <= 0) {
 app.commandLine.appendSwitch('proxy-server', `http://127.0.0.1:${sinkPort}`)
 app.commandLine.appendSwitch('proxy-bypass-list', '<-loopback>')
 app.commandLine.appendSwitch('host-resolver-rules', 'MAP * ~NOTFOUND, EXCLUDE 127.0.0.1')
+// Capture devices are Chromium's fakes, so a media-permission regression can never open the real
+// microphone or camera or raise a macOS privacy prompt. Deliberately NOT use-fake-ui-for-media-stream:
+// that auto-accepts and would bypass the app's permission handler the media tests assert on.
+// codex:run npm run test:e2e -- tests/e2e/security.spec.ts tests/e2e/harness.spec.ts
+app.commandLine.appendSwitch('use-fake-device-for-media-stream')
 
 const headed = process.env.JIRA_DESKTOP_E2E_HEADED === '1'
 
@@ -57,8 +64,39 @@ function stayOutOfTheWay(): void {
   }
   proto.focus = function () {}
   proto.moveTop = function () {}
-  // Windows constructed with the default show: true are already on screen by the time this fires
-  app.on('browser-window-created', (_, win) => keepOffScreen(win))
+  // Every window, including window.open children that Electron constructs internally. This event
+  // fires inside the constructor, before the native show that a window created with the default
+  // show: true gets (and options like center: true are applied after it too). With another app
+  // frontmost, that native show made the window key (browser-window-focus), and closing a key
+  // window handed key status to the next one; a non-focusable window can do neither.
+  //
+  // The constructor also places the window after this event: center: true, centring when no x/y
+  // is given, cascading for window.open children. That emits 'move' synchronously, inside the
+  // constructor and before its native show, and no 'show' event follows that show. So until the
+  // constructor has returned (the first microtask after this event), every move it makes is
+  // undone as it happens, which keeps the native show off-screen too; then it is pushed off once
+  // more for platforms whose placement emits no synchronous 'move'.
+  // codex:run npm run test:e2e -- tests/e2e/harness.spec.ts
+  app.on('browser-window-created', (_, win) => {
+    win.setFocusable(false)
+    keepOffScreen(win)
+    let moving = false
+    const undoConstructorMove = (): void => {
+      if (moving) return
+      moving = true
+      try {
+        keepOffScreen(win)
+      } finally {
+        moving = false
+      }
+    }
+    win.on('move', undoConstructorMove)
+    queueMicrotask(() => {
+      win.off('move', undoConstructorMove)
+      keepOffScreen(win)
+    })
+    win.on('show', () => keepOffScreen(win))
+  })
 }
 
 if (!headed) stayOutOfTheWay()
@@ -127,10 +165,38 @@ function respond(request: Request, ses: Session): Response {
   })
 }
 
+// A navigation to a scheme Chromium cannot load goes straight to the OS once the session grants
+// the 'openExternal' permission (Electron grants it when no handler is set), bypassing the
+// shell.openExternal recorder. So on every session that grant is always refused. The app's own
+// handler still decides first, and its verdict is recorded with the URL as [externalURL, granted]
+// (granted is true when no handler is set, Electron's default); read it with
+// stubCalls('permission', 'openExternal').
+function guardExternalProtocols(ses: Session): void {
+  type Handler = Parameters<Session['setPermissionRequestHandler']>[0]
+  const setHandler = ses.setPermissionRequestHandler.bind(ses)
+  const wrap = (handler: Handler): NonNullable<Handler> => (contents, permission, callback, details) => {
+    if (permission !== 'openExternal') {
+      if (handler) handler(contents, permission, callback, details)
+      else callback(true)
+      return
+    }
+    const externalURL = 'externalURL' in details ? details.externalURL : undefined
+    const refuse = (appGranted: boolean): void => {
+      ;(state.calls['permission.openExternal'] ??= []).push([externalURL, appGranted])
+      callback(false)
+    }
+    if (handler) handler(contents, permission, refuse, details)
+    else refuse(true)
+  }
+  ses.setPermissionRequestHandler = (handler) => setHandler(wrap(handler))
+  setHandler(wrap(null))
+}
+
 const intercepted = new WeakSet<Session>()
 function intercept(ses: Session): void {
   if (intercepted.has(ses)) return
   intercepted.add(ses)
+  guardExternalProtocols(ses)
   for (const scheme of ['https', 'http']) {
     ses.protocol.handle(scheme, (request) => respond(request, ses))
   }

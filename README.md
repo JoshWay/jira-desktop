@@ -129,16 +129,19 @@ npm run clean
 src/
 ├── main/                      # Electron main process
 │   ├── main.ts               # Application entry point
+│   ├── dialogs/              # Set Jira URL / New Atlassian Window dialog (DialogController)
+│   ├── security/             # URL, navigation and local-page IPC policy
 │   └── services/             # Core services
 │       ├── ContextMenuService.ts    # Right-click context menus
 │       ├── StorageService.ts        # Configuration persistence
 │       └── WindowManager.ts         # Window lifecycle management
-├── preload/                   # Secure bridge between main and renderer
-│   └── preload.ts            # Context-isolated API exposure
-└── renderer/                  # Frontend UI (development interface)
-    ├── index.html            # Development configuration interface
-    ├── style.css             # Styling with dark mode support
-    └── app.js               # Frontend application logic
+├── preload/                   # Per-window preloads for local pages only (never remote content)
+│   └── dialog.ts             # Exposes dialogAPI (getInit / submit / cancel) to the dialog
+├── renderer/                  # Local pages (sandboxed, CSP-restricted)
+│   ├── dialog.html           # The dialog page
+│   ├── dialog.ts
+│   └── dialog.css
+└── shared/                    # Types shared by main, preload and renderer (no electron imports)
 ```
 
 ## Technical Details

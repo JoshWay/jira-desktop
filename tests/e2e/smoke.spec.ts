@@ -11,12 +11,15 @@ test('launches, shows the main window and keeps all traffic local', async ({ lau
   const mainWindow = await app.electronApp.browserWindow(page)
   await expect.poll(() => mainWindow.evaluate((win) => win.isVisible())).toBe(true)
 
-  // Current behaviour, recorded so Task 4 has one place to tighten it (sandbox -> true)
+  // Remote content is sandboxed, isolated and has no preload (spec R2; details in security.spec.ts)
   const prefs = await mainWindow.evaluate((win) => {
     const p = win.webContents.getLastWebPreferences()
-    return { sandbox: p?.sandbox, contextIsolation: p?.contextIsolation, nodeIntegration: p?.nodeIntegration, webSecurity: p?.webSecurity }
+    // Electron 44 leaves `preload` out of getLastWebPreferences; _getPreloadScript has it
+    const contents = win.webContents as Electron.WebContents & { _getPreloadScript?: () => unknown }
+    if (typeof contents._getPreloadScript !== 'function') throw new Error('Electron no longer has webContents._getPreloadScript')
+    return { sandbox: p?.sandbox, contextIsolation: p?.contextIsolation, nodeIntegration: p?.nodeIntegration, webSecurity: p?.webSecurity, preload: contents._getPreloadScript() }
   })
-  expect(prefs).toEqual({ sandbox: false, contextIsolation: true, nodeIntegration: false, webSecurity: true })
+  expect(prefs).toEqual({ sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, preload: null })
 
   // The profile lives in the per-test temp dir, never the real one
   const paths = await app.electronApp.evaluate(({ app: electronApp }) => ({
