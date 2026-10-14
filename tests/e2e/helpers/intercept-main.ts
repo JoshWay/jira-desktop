@@ -12,10 +12,10 @@
 //      every session whatever permission handler the app installs; see guardExternalProtocols.
 //
 // It also keeps runs off the user's screen (see stayOutOfTheWay): no Dock icon or menu-bar
-// takeover on macOS, windows are shown inactive, fully transparent, click-through and pushed
-// off-screen, and focus()/moveTop() do nothing. Windows really are shown (isVisible() is true),
-// so they are not background-throttled. Set JIRA_DESKTOP_E2E_HEADED=1 to get normal, visible,
-// focusable windows for debugging.
+// takeover on macOS, every window is made unable to take focus the moment it is created, shown
+// inactive, fully transparent, click-through and pushed off-screen, and focus()/moveTop() do
+// nothing. Windows really are shown (isVisible() is true), so they are not background-throttled.
+// Set JIRA_DESKTOP_E2E_HEADED=1 to get normal, visible, focusable windows for debugging.
 import * as electron from 'electron'
 import { app, BrowserWindow, session } from 'electron'
 import type { Session } from 'electron'
@@ -59,8 +59,16 @@ function stayOutOfTheWay(): void {
   }
   proto.focus = function () {}
   proto.moveTop = function () {}
-  // Windows constructed with the default show: true are already on screen by the time this fires
-  app.on('browser-window-created', (_, win) => keepOffScreen(win))
+  // Every window, including window.open children that Electron constructs internally. This event
+  // fires inside the constructor, before the native show that a window created with the default
+  // show: true gets (and options like center: true are applied after it too). With another app
+  // frontmost, that native show made the window key (browser-window-focus), and closing a key
+  // window handed key status to the next one; a non-focusable window can do neither.
+  app.on('browser-window-created', (_, win) => {
+    win.setFocusable(false)
+    keepOffScreen(win)
+    win.on('show', () => keepOffScreen(win))
+  })
 }
 
 if (!headed) stayOutOfTheWay()

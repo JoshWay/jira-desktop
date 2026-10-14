@@ -164,3 +164,40 @@ test('keeps windows off the user\'s screen and out of focus', async ({ launchApp
   expect(ticks).toBeGreaterThan(30)
   expect(await app.windowFocusEvents()).toBe(0)
 })
+
+test('windows shown at construction, and window.open children, can never take focus', async ({ launchApp }) => {
+  test.skip(process.env.JIRA_DESKTOP_E2E_HEADED === '1', 'headed runs show real windows')
+  const app = await launchApp()
+  const page = await app.electronApp.firstWindow()
+  await expect(page).toHaveURL('https://id.atlassian.com/login')
+
+  // The native show of a default show: true window happens after browser-window-created, and
+  // center: true is applied after it too; with another app frontmost that show used to make the
+  // window key. The fix is environment-independent to check: no window is ever focusable.
+  const constructed = await app.electronApp.evaluate(async ({ BrowserWindow }) => {
+    const win = new BrowserWindow({ width: 300, height: 200, center: true })
+    await new Promise((done) => setTimeout(done, 300))
+    return { visible: win.isVisible(), focusable: win.isFocusable(), focused: win.isFocused(), x: win.getPosition()[0] }
+  })
+  expect(constructed).toEqual({ visible: true, focusable: false, focused: false, x: expect.any(Number) })
+  expect(constructed.x).toBeLessThan(0)
+
+  // A window.open child is constructed by Electron itself, not through the app's code
+  const childOpened = app.electronApp.waitForEvent('window')
+  await page.evaluate(() => { window.open('https://accounts.google.com/harness') })
+  const child = await childOpened
+  await expect(child).toHaveURL('https://accounts.google.com/harness')
+  const opened = await app.electronApp.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL() === 'https://accounts.google.com/harness')!
+    return { visible: win.isVisible(), focusable: win.isFocusable(), focused: win.isFocused(), x: win.getPosition()[0] }
+  })
+  expect(opened).toEqual({ visible: true, focusable: false, focused: false, x: expect.any(Number) })
+  expect(opened.x).toBeLessThan(0)
+
+  // Closing windows must not hand focus to the rest
+  await app.electronApp.evaluate(({ BrowserWindow }) => {
+    for (const win of BrowserWindow.getAllWindows().slice(0, -1)) win.close()
+  })
+  await expect.poll(() => app.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1)
+  expect(await app.windowFocusEvents()).toBe(0)
+})
