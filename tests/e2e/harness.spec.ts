@@ -180,12 +180,23 @@ test('windows shown at construction, and window.open children, can never take fo
   // The native show of a default show: true window happens after browser-window-created, and
   // center: true is applied after it too; with another app frontmost that show used to make the
   // window key. The fix is environment-independent to check: no window is ever focusable.
+  // The constructor also places the window itself after that event (center: true here; centring
+  // or cascading when no x/y is given), so it must still be off-screen when the constructor
+  // returns, i.e. it was already off-screen when the native show put it up, and it must stay there.
   const constructed = await app.electronApp.evaluate(async ({ BrowserWindow }) => {
     const win = new BrowserWindow({ width: 300, height: 200, center: true })
+    const atReturn = { visible: win.isVisible(), x: win.getPosition()[0] }
     await new Promise((done) => setTimeout(done, 300))
-    return { visible: win.isVisible(), focusable: win.isFocusable(), focused: win.isFocused(), x: win.getPosition()[0] }
+    return { atReturn, visible: win.isVisible(), focusable: win.isFocusable(), focused: win.isFocused(), x: win.getPosition()[0] }
   })
-  expect(constructed).toEqual({ visible: true, focusable: false, focused: false, x: expect.any(Number) })
+  expect(constructed).toEqual({
+    atReturn: { visible: true, x: expect.any(Number) },
+    visible: true,
+    focusable: false,
+    focused: false,
+    x: expect.any(Number)
+  })
+  expect(constructed.atReturn.x).toBeLessThan(0)
   expect(constructed.x).toBeLessThan(0)
 
   // A window.open child is constructed by Electron itself, not through the app's code

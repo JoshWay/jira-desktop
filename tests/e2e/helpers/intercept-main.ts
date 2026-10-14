@@ -64,9 +64,32 @@ function stayOutOfTheWay(): void {
   // show: true gets (and options like center: true are applied after it too). With another app
   // frontmost, that native show made the window key (browser-window-focus), and closing a key
   // window handed key status to the next one; a non-focusable window can do neither.
+  //
+  // The constructor also places the window after this event: center: true, centring when no x/y
+  // is given, cascading for window.open children. That emits 'move' synchronously, inside the
+  // constructor and before its native show, and no 'show' event follows that show. So until the
+  // constructor has returned (the first microtask after this event), every move it makes is
+  // undone as it happens, which keeps the native show off-screen too; then it is pushed off once
+  // more for platforms whose placement emits no synchronous 'move'.
+  // codex:run npm run test:e2e -- tests/e2e/harness.spec.ts
   app.on('browser-window-created', (_, win) => {
     win.setFocusable(false)
     keepOffScreen(win)
+    let moving = false
+    const undoConstructorMove = (): void => {
+      if (moving) return
+      moving = true
+      try {
+        keepOffScreen(win)
+      } finally {
+        moving = false
+      }
+    }
+    win.on('move', undoConstructorMove)
+    queueMicrotask(() => {
+      win.off('move', undoConstructorMove)
+      keepOffScreen(win)
+    })
     win.on('show', () => keepOffScreen(win))
   })
 }
