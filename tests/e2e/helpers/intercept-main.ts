@@ -7,7 +7,9 @@
 //   2. every session's proxy is the test's escape sink on loopback, so anything that still
 //      bypasses (1) lands in the sink, is recorded as escaped, and never leaves the machine;
 //   3. functions that hand work to the OS (opening the real browser or a file) or block on a
-//      modal are replaced with recorders before the app's code runs; see DEFAULT_STUBS.
+//      modal are replaced with recorders before the app's code runs; see DEFAULT_STUBS;
+//   4. Chromium's own OS hand-off for schemes it cannot load (smb:, vscode:, ...) is refused on
+//      every session whatever permission handler the app installs; see guardExternalProtocols.
 //
 // It also keeps runs off the user's screen (see stayOutOfTheWay): no Dock icon or menu-bar
 // takeover on macOS, windows are shown inactive, fully transparent, click-through and pushed
@@ -127,10 +129,32 @@ function respond(request: Request, ses: Session): Response {
   })
 }
 
+// A navigation to a scheme Chromium cannot load goes straight to the OS once the session grants
+// the 'openExternal' permission (Electron grants it when no handler is set), bypassing the
+// shell.openExternal recorder. So every session refuses it before any app handler sees it, and
+// records the URL; read it with stubCalls('permission', 'openExternal').
+function guardExternalProtocols(ses: Session): void {
+  type Handler = Parameters<Session['setPermissionRequestHandler']>[0]
+  const setHandler = ses.setPermissionRequestHandler.bind(ses)
+  const wrap = (handler: Handler): NonNullable<Handler> => (contents, permission, callback, details) => {
+    if (permission === 'openExternal') {
+      const calls = (state.calls['permission.openExternal'] ??= [])
+      calls.push(['externalURL' in details ? details.externalURL : undefined])
+      callback(false)
+      return
+    }
+    if (handler) handler(contents, permission, callback, details)
+    else callback(true)
+  }
+  ses.setPermissionRequestHandler = (handler) => setHandler(wrap(handler))
+  setHandler(wrap(null))
+}
+
 const intercepted = new WeakSet<Session>()
 function intercept(ses: Session): void {
   if (intercepted.has(ses)) return
   intercepted.add(ses)
+  guardExternalProtocols(ses)
   for (const scheme of ['https', 'http']) {
     ses.protocol.handle(scheme, (request) => respond(request, ses))
   }

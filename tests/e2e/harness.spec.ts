@@ -72,6 +72,22 @@ test('replaces OS hand-offs and blocking dialogs with recorders by default', asy
   expect(await app.stubCalls('shell', 'openPath')).toEqual([['/nonexistent']])
 })
 
+test('refuses and records Chromium\'s own OS protocol hand-off, whatever handler the app sets', async ({ launchApp }) => {
+  const app = await launchApp()
+  const page = await app.electronApp.firstWindow()
+  await expect(page).toHaveURL('https://id.atlassian.com/login')
+  // Simulate a broken app: no navigation guard, and a permission handler that grants everything.
+  // The probe scheme is unregistered, so even a harness failure here opens nothing.
+  await app.electronApp.evaluate(({ BrowserWindow, session }) => {
+    BrowserWindow.getAllWindows()[0].webContents.removeAllListeners('will-navigate')
+    session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(true))
+  })
+  await page.evaluate(() => { window.location.href = 'jira-desktop-e2e-probe://x/y' })
+  await expect.poll(() => app.stubCalls('permission', 'openExternal')).toEqual([['jira-desktop-e2e-probe://x/y']])
+  // Other permissions still reach the app's handler
+  expect(await page.evaluate(() => Notification.requestPermission())).toBe('granted')
+})
+
 test('applies launch-time stubs before the app starts, and stubs after launch', async ({ launchApp }) => {
   const app = await launchApp({
     stubs: [
