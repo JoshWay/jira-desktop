@@ -29,7 +29,9 @@ export default defineConfig({
       outDir: 'dist/renderer',
       rollupOptions: {
         input: {
-          dialog: resolve(__dirname, 'src/renderer/dialog.html')
+          dialog: resolve(__dirname, 'src/renderer/dialog.html'),
+          // Static, script-free page the main window shows while no site is loaded
+          placeholder: resolve(__dirname, 'src/renderer/placeholder.html')
         }
       }
     }

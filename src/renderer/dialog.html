@@ -12,8 +12,13 @@
   <!-- All text and values are filled in by dialog.ts with textContent / value, never as markup -->
   <form id="dialog-form" novalidate>
     <h1 id="heading"></h1>
-    <label for="url" id="url-label"></label>
-    <input id="url" name="url" type="url" autocomplete="off" spellcheck="false" maxlength="2048" autofocus>
+    <p id="message" hidden></p>
+    <!-- load-error only: the address that failed, as plain text -->
+    <p id="failed-url" hidden></p>
+    <div id="url-fields">
+      <label for="url" id="url-label"></label>
+      <input id="url" name="url" type="url" autocomplete="off" spellcheck="false" maxlength="2048" autofocus>
+    </div>
 
     <div id="new-window-fields" hidden>
       <label for="product">Product</label>
@@ -31,6 +36,7 @@
 
     <div class="buttons">
       <button id="cancel" type="button">Cancel</button>
+      <button id="change-url" type="button" hidden>Change URL</button>
       <button id="submit" type="submit" class="primary" disabled>OK</button>
     </div>
   </form>

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  NOT_SITE_HOSTS,
+  isNotASiteUrl,
   APP_HOST_SUFFIXES,
   AUTH_HOSTS,
   hostMatches,
@@ -260,6 +262,22 @@ describe('hardening (fix round 1)', () => {
     for (const input of ['https://x.atlassian.net@evil.com', 'https://x.atl\u0430ssian.net/']) {
       const u = okUrl(input)
       expect(u === null || !isInAppUrl(u)).toBe(true)
+    }
+  })
+})
+
+describe('isNotASiteUrl', () => {
+  it('is true for Atlassian account and marketing hosts, which are never a Jira site', () => {
+    expect(NOT_SITE_HOSTS).toEqual(['atlassian.net', 'www.atlassian.net', 'id.atlassian.com'])
+    expect(Object.isFrozen(NOT_SITE_HOSTS)).toBe(true)
+    for (const url of ['https://atlassian.net/jira', 'https://www.atlassian.net/', 'https://id.atlassian.com/login', 'https://ID.Atlassian.com./login', 'http://atlassian.net/']) {
+      expect(isNotASiteUrl(url), url).toBe(true)
+    }
+  })
+
+  it('is false for team sites, self-hosted sites and anything unparseable', () => {
+    for (const url of ['https://team.atlassian.net/jira', 'https://jira.atlassian.com/', 'https://jira.corp.test/', 'https://id.atlassian.com.evil.test/', 'not a url']) {
+      expect(isNotASiteUrl(url), url).toBe(false)
     }
   })
 })

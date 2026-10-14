@@ -8,9 +8,14 @@ import type { DialogAPI, DialogInit, DialogSubmitResult } from '../shared/dialog
 
 const dialogAPI: DialogAPI = {
   getInit: (): Promise<DialogInit> => ipcRenderer.invoke(DIALOG_CHANNELS.getInit),
-  // Copy only the known fields; main validates them again
+  // Copy only the known fields; main validates them again, per mode
   submit: (payload): Promise<DialogSubmitResult> =>
-    ipcRenderer.invoke(DIALOG_CHANNELS.submit, { url: payload.url, product: payload.product, background: payload.background }),
+    ipcRenderer.invoke(DIALOG_CHANNELS.submit, {
+      url: payload.url,
+      product: payload.product,
+      background: payload.background,
+      action: payload.action
+    }),
   cancel: (): Promise<void> => ipcRenderer.invoke(DIALOG_CHANNELS.cancel)
 }
 

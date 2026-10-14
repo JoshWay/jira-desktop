@@ -78,11 +78,14 @@ function stayOutOfTheWay(): void {
   // more for platforms whose placement emits no synchronous 'move'.
   // codex:run npm run test:e2e -- tests/e2e/harness.spec.ts
   app.on('browser-window-created', (_, win) => {
+    state.createdBounds[win.id] = win.getBounds()
     win.setFocusable(false)
     keepOffScreen(win)
     let moving = false
     const undoConstructorMove = (): void => {
       if (moving) return
+      // Where the constructor put it (recorded for tests before it is undone)
+      state.createdBounds[win.id] = win.getBounds()
       moving = true
       try {
         keepOffScreen(win)
@@ -114,6 +117,7 @@ const state: E2EMainState = {
   routes: JSON.parse(process.env.JIRA_DESKTOP_E2E_ROUTES ?? '[]') as Route[],
   calls: {},
   windowFocusEvents: 0,
+  createdBounds: {},
   stub
 }
 globalThis.__jiraDesktopE2E = state

@@ -16,6 +16,11 @@ export function registerLocalPage(url: string): void {
   localPages.register(url)
 }
 
+// True for a URL of a registered local page (same matching the navigation policy uses)
+export function isLocalPageUrl(url: string): boolean {
+  return localPages.matches(url)
+}
+
 // Remote content can call window.open or navigate in a loop with no user gesture (Electron has no
 // popup blocker), and every external open is a browser tab or a mail compose window. One app-wide
 // budget, whoever asks: a short burst, then about one a second; the rest are dropped and logged.

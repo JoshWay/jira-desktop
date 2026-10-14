@@ -1,47 +1,112 @@
-import { app, BrowserWindow, Menu, nativeTheme, dialog } from 'electron'
+import { app, BrowserWindow, Menu, nativeTheme, dialog, screen } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { join, resolve } from 'path'
 import { WindowManager } from './services/WindowManager'
 import { ContextMenuService } from './services/ContextMenuService'
-import { installWebContentsPolicy } from './security/webContentsPolicy'
+import { installWebContentsPolicy, isLocalPageUrl, registerLocalPage } from './security/webContentsPolicy'
 import { isExpectedLoadAbort } from './security/navigationPolicy'
+import { localPageUrl } from './security/localPageUrl'
 import { DialogController } from './dialogs/DialogController'
+import { createSettingsStore } from './services/settings'
+import type { SettingsStore, ThemeSource } from './services/settings'
+import { STRANDED_LOAD_DESCRIPTION, describeLoadFailure, isStranded, resolveSavedSiteUrl, shouldShowLoadError } from './services/mainWindowRules'
+import type { LoadFailure } from './services/mainWindowRules'
+import { mainWindowPlacement } from './services/windowBounds'
+
+const DEFAULT_WINDOW_SIZE = Object.freeze({ width: 1200, height: 900 })
+const MIN_WINDOW_SIZE = Object.freeze({ width: 800, height: 600 })
+// The main window is created hidden and normally shown on its first paint; if no load event shows
+// it by then, it is shown anyway, so the app is never running with no window
+const MAIN_WINDOW_SHOW_FALLBACK_MS = 5_000
+
+const THEME_CHOICES: readonly { label: string; value: ThemeSource }[] = Object.freeze([
+  { label: 'System', value: 'system' },
+  { label: 'Light', value: 'light' },
+  { label: 'Dark', value: 'dark' }
+])
+
+function logLoadFailure(error: unknown): void {
+  if (!isExpectedLoadAbort(error)) console.error('Failed to load:', error)
+}
 
 class JiraApp {
   private mainWindow: BrowserWindow | null = null
-  private jiraUrl: string = 'https://id.atlassian.com/login'
   private manualUpdateCheck: boolean = false
   private windowManager: WindowManager
   private contextMenuService: ContextMenuService
   private dialogs: DialogController
+  private settings: SettingsStore
+  // The static page the main window shows while no site is loaded (first run, failed load)
+  private readonly placeholderUrl: string
+  private siteUrlCache: { raw: unknown; url: string | undefined } | null = null
 
   constructor() {
+    // Both stores load synchronously, so they are ready before anything reads them (spec R3)
+    this.settings = createSettingsStore()
+    // Script-free and preload-free; registered so remote content can never navigate to it
+    this.placeholderUrl = localPageUrl('placeholder.html')
+    registerLocalPage(this.placeholderUrl)
     this.windowManager = new WindowManager()
-    this.contextMenuService = new ContextMenuService(this.windowManager, () => this.jiraUrl)
+    this.contextMenuService = new ContextMenuService(this.windowManager, () => this.siteUrl())
     // Registers the dialog IPC channels once, at startup (spec R2)
     // codex:run npm run test:e2e -- tests/e2e/dialog.spec.ts
+    // codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
     this.dialogs = new DialogController({
       getParentWindow: () => this.mainWindow,
-      getSiteUrl: () => this.jiraUrl,
-      setSiteUrl: (url) => {
-        this.jiraUrl = url
-        if (this.mainWindow) this.loadJiraApp()
-        else this.createWindow()
-      },
+      getSiteUrl: () => this.siteUrl(),
+      setSiteUrl: (url) => this.setSiteUrl(url),
+      retryLoad: (url) => this.loadSite(url),
       windowManager: this.windowManager
     })
     this.initializeApp()
     this.setupAutoUpdater()
   }
 
+  // The configured site, re-validated from settings.json on every read (the file is outside the
+  // app's control, and main's own loadURL bypasses the navigation policy); undefined until set.
+  // codex:run npm test -- tests/unit/mainWindowRules.test.ts
+  private siteUrl(): string | undefined {
+    const raw = this.settings.get('jiraUrl')
+    let cache = this.siteUrlCache
+    if (!cache || cache.raw !== raw) {
+      cache = { raw, url: resolveSavedSiteUrl(raw, isLocalPageUrl) }
+      this.siteUrlCache = cache
+    }
+    return cache.url
+  }
+
+  // From the set-url / welcome dialog: persisted at once, then loaded
+  // codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
+  private setSiteUrl(url: string): void {
+    this.settings.set('jiraUrl', url)
+    this.settings.flush()
+    if (this.mainWindow) this.loadSite(url)
+    else this.createWindow()
+  }
+
   private initializeApp(): void {
     // Navigation, window.open, <webview> and permission policy for every webContents and session
     // (spec R2). Installed before 'ready' so it covers the first window.
     // codex:run npm run test:e2e -- tests/e2e/security.spec.ts
-    installWebContentsPolicy(() => this.jiraUrl)
+    installWebContentsPolicy(() => this.siteUrl())
+
+    // A second launch (it quits at once, see the bottom of this file) brings this one forward
+    // codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
+    app.on('second-instance', () => {
+      const win = this.mainWindow
+      if (!win || win.isDestroyed()) {
+        if (app.isReady()) this.createWindow()
+        return
+      }
+      if (win.isMinimized()) win.restore()
+      win.show()
+      win.focus()
+    })
 
     // Handle app ready
     app.whenReady().then(() => {
+      // codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
+      nativeTheme.themeSource = this.settings.get('themeSource', 'system')
       this.createWindow()
       this.setupMenu()
 
@@ -60,22 +125,40 @@ class JiraApp {
       }
     })
 
-    // Handle app termination
+    // Handle app termination. Pending debounced writes are flushed synchronously; will-quit
+    // flushes again for state saved while the windows were closing.
+    // codex:run npm run test:e2e -- tests/e2e/storage.spec.ts
     app.on('before-quit', () => {
       this.windowManager.closeAllWindows()
+      this.flushStorage()
     })
+    app.on('will-quit', () => this.flushStorage())
+  }
+
+  private flushStorage(): void {
+    this.windowManager.flush()
+    this.settings.flush()
   }
 
   private createWindow(): void {
-    this.mainWindow = new BrowserWindow({
-      width: 1200,
-      height: 900,
-      minWidth: 800,
-      minHeight: 600,
+    // Saved bounds only while they are on a display that still exists (spec R3)
+    // codex:run npm test -- tests/unit/windowBounds.test.ts
+    // codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
+    const placement = mainWindowPlacement(
+      this.settings.get('mainWindow'),
+      screen.getAllDisplays().map((display) => display.workArea),
+      DEFAULT_WINDOW_SIZE,
+      MIN_WINDOW_SIZE
+    )
+    const win = new BrowserWindow({
+      ...placement.options,
+      minWidth: MIN_WINDOW_SIZE.width,
+      minHeight: MIN_WINDOW_SIZE.height,
       show: false,
       autoHideMenuBar: false,
       icon: join(__dirname, '../../resources/icon.png'),
-      // Remote content: no preload, no Node, sandboxed and isolated (spec R2)
+      // Remote content: no preload, no Node, sandboxed and isolated (spec R2). It also shows the
+      // placeholder, which needs nothing more.
       webPreferences: {
         sandbox: true,
         nodeIntegration: false,
@@ -83,31 +166,107 @@ class JiraApp {
         webSecurity: true
       }
     })
+    this.mainWindow = win
 
-    // Handle window ready
-    this.mainWindow.on('ready-to-show', () => {
-      this.mainWindow?.show()
+    // Shown once: on its first paint, or when loading first stops or a main-frame load fails before
+    // one (a load the policy cancelled paints nothing, so ready-to-show never comes), or after a
+    // bounded wait. Never again after that, so a window the user hid stays hidden.
+    // codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
+    let revealed = false
+    const reveal = (): void => {
+      if (revealed || win.isDestroyed()) return
+      revealed = true
+      clearTimeout(revealFallback)
+      win.webContents.off('did-stop-loading', reveal)
+      if (!win.isVisible()) {
+        if (placement.maximize) win.maximize()
+        win.show()
+      }
+    }
+    const revealFallback = setTimeout(reveal, MAIN_WINDOW_SHOW_FALLBACK_MS)
+    win.once('ready-to-show', reveal)
+    win.webContents.on('did-stop-loading', reveal)
+
+    win.on('closed', () => {
+      clearTimeout(revealFallback)
+      if (this.mainWindow === win) this.mainWindow = null
     })
 
-    // Handle window closed
-    this.mainWindow.on('closed', () => {
-      this.mainWindow = null
+    // Bounds (as restored, when maximized) and maximized state, kept current; the store debounces
+    // the writes and the quit path flushes them
+    const saveState = (): void => {
+      if (win.isDestroyed()) return
+      this.settings.set('mainWindow', { bounds: win.getNormalBounds(), isMaximized: win.isMaximized() })
+    }
+    win.on('resized', saveState)
+    win.on('moved', saveState)
+    win.on('maximize', saveState)
+    win.on('unmaximize', saveState)
+    win.on('close', saveState)
+
+    // A failed main-frame load (not an aborted one) shows the error view (see loadSite for an
+    // aborted one that leaves nothing to show)
+    // codex:run npm test -- tests/unit/mainWindowRules.test.ts
+    // codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
+    win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      if (isMainFrame) reveal()
+      if (!shouldShowLoadError(errorCode, isMainFrame, validatedURL, isLocalPageUrl)) return
+      // Not from inside the event: Chromium is still committing its own error page
+      setImmediate(() => this.showLoadError(win, describeLoadFailure(validatedURL, errorDescription, this.siteUrl())))
     })
 
-    // Setup context menu for the main window
-    this.contextMenuService.setupForWindow(this.mainWindow)
+    this.contextMenuService.setupForWindow(win)
 
-    // Load Jira directly
-    this.loadJiraApp()
+    const site = this.siteUrl()
+    if (site) this.loadSite(site)
+    else this.showPlaceholder(win, () => this.dialogs.open('welcome'))
   }
 
-  private loadJiraApp(): void {
-    if (!this.mainWindow) return
+  // Loads `then` once the placeholder is up (or failed to come up)
+  private showPlaceholder(win: BrowserWindow, then: () => void): void {
+    win
+      .loadURL(this.placeholderUrl)
+      .catch(logLoadFailure)
+      .finally(() => {
+        if (!win.isDestroyed() && this.mainWindow === win) then()
+      })
+  }
 
-    // Load Jira directly - just like the original Nativefier approach
-    this.mainWindow.loadURL(this.jiraUrl).catch((error: unknown) => {
-      if (!isExpectedLoadAbort(error)) console.error('Failed to load Jira:', error)
-    })
+  private showErrorIfStranded(win: BrowserWindow, url: string): void {
+    if (win.isDestroyed() || this.mainWindow !== win) return
+    const contents = win.webContents
+    if (!isStranded(contents.getURL(), contents.isLoading(), isLocalPageUrl)) return
+    this.showLoadError(win, describeLoadFailure(url, STRANDED_LOAD_DESCRIPTION, this.siteUrl()))
+  }
+
+  private showLoadError(win: BrowserWindow, failure: LoadFailure): void {
+    if (win.isDestroyed() || this.mainWindow !== win) return
+    this.showPlaceholder(win, () => this.dialogs.showLoadError(failure))
+  }
+
+  // Loads a site URL (already validated: the saved site, a dialog result or a load failure's
+  // retryUrl) in the main window. While it shows the placeholder, a local page, the policy treats
+  // it as confined and would hand the site's own redirects to the browser; so it leaves the
+  // placeholder for about:blank first.
+  // A site load that ends with nothing to show for it shows the error view, not a blank (at startup,
+  // never shown) window. The policy cancelling the site's redirect (sent to the browser, or refused)
+  // does that: no did-fail-load fires and nothing commits; loadURL only rejects.
+  // codex:run npm test -- tests/unit/mainWindowRules.test.ts
+  // codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
+  private loadSite(url: string): void {
+    const win = this.mainWindow
+    if (!win || win.isDestroyed()) return
+    const load = (): void => {
+      if (win.isDestroyed()) return
+      win.loadURL(url).catch((error: unknown) => {
+        logLoadFailure(error)
+        // Checked once the rejection has settled: a newer load that superseded this one, or the
+        // error view a real failure opened (did-fail-load), is under way by then
+        setImmediate(() => this.showErrorIfStranded(win, url))
+      })
+    }
+    if (isLocalPageUrl(win.webContents.getURL())) win.loadURL('about:blank').then(load, load)
+    else load()
   }
 
   private setupMenu(): void {
@@ -121,11 +280,6 @@ class JiraApp {
             label: 'Set Jira URL...',
             accelerator: 'CommandOrControl+U',
             click: () => this.dialogs.open('set-url')
-          },
-          {
-            label: 'Toggle Dark Mode',
-            accelerator: 'CommandOrControl+Shift+D',
-            click: () => this.toggleDarkMode()
           },
           { type: 'separator' },
           {
@@ -174,6 +328,17 @@ class JiraApp {
           { role: 'zoomIn' },
           { role: 'zoomOut' },
           { type: 'separator' },
+          {
+            label: 'Appearance',
+            // codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
+            submenu: THEME_CHOICES.map(({ label, value }) => ({
+              label,
+              type: 'radio' as const,
+              checked: nativeTheme.themeSource === value,
+              click: () => this.setTheme(value)
+            }))
+          },
+          { type: 'separator' },
           { role: 'togglefullscreen' }
         ]
       },
@@ -190,8 +355,12 @@ class JiraApp {
     Menu.setApplicationMenu(menu)
   }
 
-  private toggleDarkMode(): void {
-    nativeTheme.themeSource = nativeTheme.shouldUseDarkColors ? 'light' : 'dark'
+  // Applied, persisted, and the menu rebuilt so exactly the chosen radio is checked
+  // codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
+  private setTheme(theme: ThemeSource): void {
+    nativeTheme.themeSource = theme
+    this.settings.set('themeSource', theme)
+    this.setupMenu()
   }
 
   private setupAutoUpdater(): void {
@@ -343,5 +512,12 @@ if (userDataDirOverride) {
   app.setPath('userData', resolve(userDataDirOverride))
 }
 
-// Initialize the app
-new JiraApp()
+// One instance per profile: the lock lives in the userData dir, so it is taken after the override
+// above (e2e launches, each on its own dir, never collide). A second launch hands over to the first
+// (its 'second-instance') and quits before creating anything.
+// codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
+if (app.requestSingleInstanceLock()) {
+  new JiraApp()
+} else {
+  app.quit()
+}
