@@ -14,7 +14,9 @@ test('launches, shows the main window and keeps all traffic local', async ({ lau
   // Remote content is sandboxed, isolated and has no preload (spec R2; details in security.spec.ts)
   const prefs = await mainWindow.evaluate((win) => {
     const p = win.webContents.getLastWebPreferences()
-    return { sandbox: p?.sandbox, contextIsolation: p?.contextIsolation, nodeIntegration: p?.nodeIntegration, webSecurity: p?.webSecurity, preload: p?.preload ?? null }
+    // Electron 44 leaves `preload` out of getLastWebPreferences; _getPreloadScript has it
+    const preload = (win.webContents as Electron.WebContents & { _getPreloadScript(): { filePath: string } | null })._getPreloadScript()
+    return { sandbox: p?.sandbox, contextIsolation: p?.contextIsolation, nodeIntegration: p?.nodeIntegration, webSecurity: p?.webSecurity, preload: preload?.filePath ?? null }
   })
   expect(prefs).toEqual({ sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, preload: null })
 

@@ -36,14 +36,29 @@ const AUTH_POPUP_WEB_PREFERENCES: WebPreferences = Object.freeze({
 
 // Contents that hold any privilege (see hasPrivilegedPrefs), or show a local page, may never load
 // remote content. Unknown prefs fail closed.
-// codex:run npm test -- tests/unit/navigationPolicy.test.ts
-// The dialog (dialogs/DialogController.ts) shows a registered local page, so it is confined.
 // getLastWebPreferences is undocumented (Electron's own window.open inheritance uses it), hence
 // the shim; if it ever disappears every contents becomes confined and the e2e suite fails loudly.
-type WithPrefs = WebContents & { getLastWebPreferences?: () => WebPreferences | null }
+// Electron 44 leaves the per-window `preload` out of it, so the preload comes from
+// _getPreloadScript (undocumented too; Electron's sandboxed preload loader uses it), and fails
+// closed the same way. The dialog (dialogs/DialogController.ts) has a preload, so it is confined
+// to local pages by its prefs, not only by the URL it happens to show.
+// codex:run npm test -- tests/unit/navigationPolicy.test.ts
+// codex:run npm run test:e2e -- tests/e2e/security.spec.ts
+type WithInternals = WebContents & {
+  getLastWebPreferences?: () => WebPreferences | null
+  _getPreloadScript?: () => { filePath?: string } | null
+}
+
+function preloadOf(contents: WithInternals): string | undefined {
+  if (typeof contents._getPreloadScript !== 'function') return 'unknown'
+  const script = contents._getPreloadScript()
+  return script ? (script.filePath ?? 'unknown') : undefined
+}
 
 function isConfined(contents: WebContents): boolean {
-  if (hasPrivilegedPrefs((contents as WithPrefs).getLastWebPreferences?.())) return true
+  const internals = contents as WithInternals
+  const prefs = internals.getLastWebPreferences?.()
+  if (hasPrivilegedPrefs(prefs && { ...prefs, preload: prefs.preload || preloadOf(internals) })) return true
   return localPages.matches(contents.getURL())
 }
 

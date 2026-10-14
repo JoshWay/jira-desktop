@@ -51,14 +51,18 @@ async function prefsOf(electronApp: ElectronApplication, url: string) {
   return electronApp.evaluate(({ BrowserWindow, session }, target) => {
     const win = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL() === target)
     if (!win) throw new Error(`no window at ${target}`)
-    const contents = win.webContents as Electron.WebContents & { getLastWebPreferences(): Electron.WebPreferences }
+    // Electron 44 leaves `preload` out of getLastWebPreferences; _getPreloadScript has it
+    const contents = win.webContents as Electron.WebContents & {
+      getLastWebPreferences(): Electron.WebPreferences
+      _getPreloadScript(): { filePath: string } | null
+    }
     const p = contents.getLastWebPreferences()
     return {
       sandbox: p.sandbox,
       contextIsolation: p.contextIsolation,
       nodeIntegration: p.nodeIntegration,
       webSecurity: p.webSecurity,
-      preload: p.preload ?? null,
+      preload: contents._getPreloadScript()?.filePath ?? null,
       isDefaultSession: contents.session === session.defaultSession
     }
   }, url)
@@ -304,7 +308,7 @@ test('the Set URL dialog is confined to local pages, and the site it sets become
   const dialogUrl = dialog.url()
   expect(dialogUrl).toMatch(DIALOG_PAGE)
 
-  // The dialog is a local page, so it is confined: even an in-app URL goes to the browser
+  // The dialog has a preload, so it is confined: even an in-app URL goes to the browser
   expect(await navigate(app, dialog, 'https://team.atlassian.net/')).toMatchObject({ prevented: true })
   await expect.poll(() => app.stubCalls('shell', 'openExternal')).toEqual([['https://team.atlassian.net/']])
   expect(dialog.url()).toBe(dialogUrl)
@@ -324,4 +328,27 @@ test('the Set URL dialog is confined to local pages, and the site it sets become
   await expect(page).toHaveURL('https://jira.corp.test/browse/X-1')
   expect(await page.evaluate(() => navigator.permissions.query({ name: 'notifications' }).then((s) => s.state))).toBe('granted')
   expect(await app.stubCalls('shell', 'openExternal')).toEqual([['https://team.atlassian.net/']])
+})
+
+test('a contents with a preload is confined even when it is not showing a local page', async ({ launchApp }) => {
+  const app = await launchApp()
+  const page = await app.electronApp.firstWindow()
+  await expect(page).toHaveURL(START_URL)
+  await watchNavigations(app)
+
+  // Main may load what it likes; the policy governs what the page does next
+  const preloaded = app.electronApp.waitForEvent('window', { predicate: (p) => p.url() === 'https://team.atlassian.net/start' })
+  await app.electronApp.evaluate(({ BrowserWindow }) => {
+    const win = new BrowserWindow({
+      show: false,
+      webPreferences: { preload: `${process.cwd()}/dist/preload/dialog.js`, sandbox: true, contextIsolation: true }
+    })
+    void win.loadURL('https://team.atlassian.net/start')
+  })
+  const other = await preloaded
+  expect(await navigate(app, other, 'https://team.atlassian.net/next')).toMatchObject({ prevented: true })
+  await expect.poll(() => app.stubCalls('shell', 'openExternal')).toEqual([['https://team.atlassian.net/next']])
+  expect(other.url()).toBe('https://team.atlassian.net/start')
+  // The same kind of navigation from the main window (no preload) stays in-app
+  expect(await navigate(app, page, 'https://team.atlassian.net/main-next')).toMatchObject({ prevented: false })
 })
