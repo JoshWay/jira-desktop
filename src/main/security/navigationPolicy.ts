@@ -59,6 +59,19 @@ export function localPageKey(url: string): string | null {
   return null
 }
 
+// The exact page a local-page IPC sender must be showing: scheme, host and path (query and hash
+// ignored). Stricter than localPageKey, which accepts any path on the dev server's origin.
+// codex:run npm test -- tests/unit/navigationPolicy.test.ts
+export function isSameLocalPage(url: string, pageUrl: string): boolean {
+  const path = (value: string): string | null => {
+    const u = parse(value)
+    if (!u || (u.protocol !== 'http:' && u.protocol !== 'https:' && u.protocol !== 'file:')) return null
+    return `${u.protocol}//${u.host}${u.pathname}`
+  }
+  const actual = path(url)
+  return actual !== null && actual === path(pageUrl)
+}
+
 export class LocalPageRegistry {
   private readonly keys = new Set<string>()
 

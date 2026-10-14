@@ -37,8 +37,7 @@ const AUTH_POPUP_WEB_PREFERENCES: WebPreferences = Object.freeze({
 // Contents that hold any privilege (see hasPrivilegedPrefs), or show a local page, may never load
 // remote content. Unknown prefs fail closed.
 // codex:run npm test -- tests/unit/navigationPolicy.test.ts
-// TODO(Task 5): the data: prompt windows (nodeIntegration: true) are confined by this rule; they
-// never navigate, so nothing else is needed until they are replaced.
+// The dialog (dialogs/DialogController.ts) shows a registered local page, so it is confined.
 // getLastWebPreferences is undocumented (Electron's own window.open inheritance uses it), hence
 // the shim; if it ever disappears every contents becomes confined and the e2e suite fails loudly.
 type WithPrefs = WebContents & { getLastWebPreferences?: () => WebPreferences | null }

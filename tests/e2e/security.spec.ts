@@ -4,6 +4,7 @@
 import type { ElectronApplication, Page } from '@playwright/test'
 import { expect, test } from './helpers/app'
 import type { LaunchedApp } from './helpers/app'
+import { DIALOG_PAGE, openDialog } from './helpers/dialog'
 
 interface NavigationRecord {
   event: 'will-navigate' | 'will-redirect'
@@ -75,14 +76,6 @@ async function pageGlobals(page: Page) {
 
 const NO_BRIDGE = { electronAPI: 'undefined', require: 'undefined', process: 'undefined' }
 
-async function clickAppMenu(app: LaunchedApp, label: string): Promise<void> {
-  await app.electronApp.evaluate(({ Menu }, itemLabel) => {
-    const item = Menu.getApplicationMenu()!.items[0].submenu!.items.find((i) => i.label === itemLabel)
-    if (!item) throw new Error(`no menu item ${itemLabel}`)
-    ;(item.click as () => void)()
-  }, label)
-}
-
 test('main window is sandboxed, isolated, has no preload, no bridge and no remote IPC handlers', async ({ launchApp }) => {
   const app = await launchApp()
   const page = await app.electronApp.firstWindow()
@@ -112,15 +105,12 @@ test('a WindowManager window shares the default session and is equally locked do
   await app.electronApp.firstWindow()
   const target = 'https://team.atlassian.net/wiki/spaces/X'
 
-  // Through the existing New Window prompt (replaced in Task 5)
-  const promptOpened = app.electronApp.waitForEvent('window')
-  await clickAppMenu(app, 'New Atlassian Window...')
-  const prompt = await promptOpened
+  // Through the New Atlassian Window dialog
+  const dialog = await openDialog(app, 'New Atlassian Window...')
   const windowOpened = app.electronApp.waitForEvent('window', { predicate: (p) => p.url() === target })
-  await prompt.evaluate((url) => {
-    const req = (window as unknown as { require: (m: string) => { ipcRenderer: { send: (c: string, v: unknown) => void } } }).require
-    req('electron').ipcRenderer.send('open-new-window', { url, product: 'auto', background: true })
-  }, target)
+  await dialog.locator('#url').fill(target)
+  await dialog.locator('#background').check()
+  await dialog.locator('#submit').click()
   const extra = await windowOpened
 
   expect(await prefsOf(app.electronApp, target)).toMatchObject({ ...SECURE_PREFS, isDefaultSession: true })
@@ -304,26 +294,29 @@ test('<webview> attachment is always prevented', async ({ launchApp }) => {
   expect(prevented).toBe(true)
 })
 
-test('the old Set URL prompt still works, cannot load remote content itself, and its site becomes in-app', async ({ launchApp }) => {
+test('the Set URL dialog is confined to local pages, and the site it sets becomes in-app', async ({ launchApp }) => {
   const app = await launchApp()
   const page = await app.electronApp.firstWindow()
   await expect(page).toHaveURL(START_URL)
   await watchNavigations(app)
 
-  const promptOpened = app.electronApp.waitForEvent('window')
-  await clickAppMenu(app, 'Set Jira URL...')
-  const prompt = await promptOpened
-  await expect(prompt).toHaveURL(/^data:text\/html/)
+  const dialog = await openDialog(app, 'Set Jira URL...')
+  const dialogUrl = dialog.url()
+  expect(dialogUrl).toMatch(DIALOG_PAGE)
 
-  // The prompt has Node (until Task 5), so it is confined: even an in-app URL goes to the browser
-  expect(await navigate(app, prompt, 'https://team.atlassian.net/')).toMatchObject({ prevented: true })
+  // The dialog is a local page, so it is confined: even an in-app URL goes to the browser
+  expect(await navigate(app, dialog, 'https://team.atlassian.net/')).toMatchObject({ prevented: true })
   await expect.poll(() => app.stubCalls('shell', 'openExternal')).toEqual([['https://team.atlassian.net/']])
-  expect(prompt.url()).toMatch(/^data:text\/html/)
+  expect(dialog.url()).toBe(dialogUrl)
 
-  await prompt.evaluate(() => {
-    const req = (window as unknown as { require: (m: string) => { ipcRenderer: { send: (c: string, v: unknown) => void } } }).require
-    req('electron').ipcRenderer.send('set-jira-url', 'https://jira.corp.test/')
-  })
+  // ...but it can still load its own registered local page
+  const again = `${dialogUrl}?again`
+  expect(await navigate(app, dialog, again)).toMatchObject({ prevented: false })
+  await expect(dialog).toHaveURL(again)
+  await expect(dialog.locator('#url')).toHaveValue(START_URL)
+
+  await dialog.locator('#url').fill('https://jira.corp.test/')
+  await dialog.locator('#submit').click()
   await expect(page).toHaveURL('https://jira.corp.test/')
 
   // The configured self-hosted site is in-app: navigation stays in the window and permissions apply

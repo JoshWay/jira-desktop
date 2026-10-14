@@ -7,6 +7,7 @@ import {
   hasPrivilegedPrefs,
   isExpectedLoadAbort,
   isPermissionAllowed,
+  isSameLocalPage,
   localPageKey,
   toExternalHref
 } from '../../src/main/security/navigationPolicy'
@@ -65,6 +66,38 @@ describe('localPageKey', () => {
     for (const url of ['data:text/html,x', 'about:blank', 'blob:https://x.atlassian.net/1', 'javascript:1', 'not a url', '']) {
       expect(localPageKey(url)).toBeNull()
     }
+  })
+})
+
+describe('isSameLocalPage', () => {
+  it('matches the same page whatever the query or hash', () => {
+    expect(isSameLocalPage('file:///app/dist/renderer/dialog.html?again#x', 'file:///app/dist/renderer/dialog.html')).toBe(true)
+    expect(isSameLocalPage('http://localhost:5173/dialog.html#x', 'http://localhost:5173/dialog.html')).toBe(true)
+  })
+  it('is stricter than localPageKey: another path on the dev server is a different page', () => {
+    expect(isSameLocalPage('http://localhost:5173/other.html', 'http://localhost:5173/dialog.html')).toBe(false)
+    expect(isSameLocalPage('http://localhost:5173/', 'http://localhost:5173/dialog.html')).toBe(false)
+  })
+  it('refuses other files, hosts, ports and schemes', () => {
+    const page = 'file:///app/dist/renderer/dialog.html'
+    for (const url of [
+      'file:///app/dist/renderer/dialog.htm',
+      'file:///app/dist/renderer/other.html',
+      'file://host/app/dist/renderer/dialog.html',
+      'https://team.atlassian.net/app/dist/renderer/dialog.html',
+      'data:text/html,<p>x',
+      'about:blank',
+      '',
+      'not a url'
+    ]) {
+      expect(isSameLocalPage(url, page), url).toBe(false)
+    }
+    expect(isSameLocalPage('http://localhost:5174/dialog.html', 'http://localhost:5173/dialog.html')).toBe(false)
+    expect(isSameLocalPage('https://localhost:5173/dialog.html', 'http://localhost:5173/dialog.html')).toBe(false)
+  })
+  it('never matches when the expected page itself is not a local page URL', () => {
+    expect(isSameLocalPage('about:blank', 'about:blank')).toBe(false)
+    expect(isSameLocalPage('data:text/html,x', 'data:text/html,x')).toBe(false)
   })
 })
 
