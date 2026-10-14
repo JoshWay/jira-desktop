@@ -13,6 +13,18 @@ export { expect }
 const repoRoot = resolve(__dirname, '../../..')
 const interceptModule = resolve(__dirname, 'intercept-main.ts')
 
+// Chromium background requests the app cannot switch off before they start. They are still
+// refused like every other request (nothing ever leaves the machine), but recorded apart so they
+// don't fail every test. Keep this exact and per-platform; anything else that reaches the sink is
+// an escape.
+// - Linux: Electron spell-checks with Hunspell and fetches the locale's dictionary
+//   (/edgedl/chrome/dict/<locale>.bdic) while the profile loads, ahead of any app or harness hook;
+//   neither setSpellCheckerEnabled(false) nor a seeded Preferences file stops it (netlog-verified).
+// codex:run npm run test:e2e -- tests/e2e/harness.spec.ts
+const KNOWN_BACKGROUND: readonly string[] = Object.freeze(
+  process.platform === 'linux' ? ['CONNECT redirector.gvt1.com:443 HTTP/1.1'] : []
+)
+
 // Loopback proxy that every app session is pointed at. The interceptor answers http/https
 // itself, so the only traffic that reaches this server is traffic that escaped it. Nothing is
 // forwarded: the request is recorded and refused.
@@ -21,16 +33,20 @@ export class EscapeSink {
   private readonly sockets: Set<Socket>
   readonly port: number
   readonly escaped: EscapedRequest[]
+  // Refused Chromium background requests from KNOWN_BACKGROUND, kept for the test report
+  readonly background: EscapedRequest[]
 
-  private constructor(server: Server, sockets: Set<Socket>, port: number, escaped: EscapedRequest[]) {
+  private constructor(server: Server, sockets: Set<Socket>, port: number, escaped: EscapedRequest[], background: EscapedRequest[]) {
     this.server = server
     this.sockets = sockets
     this.port = port
     this.escaped = escaped
+    this.background = background
   }
 
   static async start(): Promise<EscapeSink> {
     const escaped: EscapedRequest[] = []
+    const background: EscapedRequest[] = []
     const sockets = new Set<Socket>()
     const server = createServer((socket) => {
       sockets.add(socket)
@@ -41,7 +57,8 @@ export class EscapeSink {
         head += chunk.toString('latin1')
         const end = head.indexOf('\r\n')
         if (end === -1) return
-        escaped.push({ requestLine: head.slice(0, end) })
+        const requestLine = head.slice(0, end)
+        ;(KNOWN_BACKGROUND.includes(requestLine) ? background : escaped).push({ requestLine })
         socket.end('HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\nconnection: close\r\n\r\n')
       })
       socket.on('error', () => {})
@@ -49,7 +66,7 @@ export class EscapeSink {
     await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
     const address = server.address()
     if (!address || typeof address === 'string') throw new Error('escape sink has no port')
-    return new EscapeSink(server, sockets, address.port, escaped)
+    return new EscapeSink(server, sockets, address.port, escaped, background)
   }
 
   // Empties and returns what escaped so far (for tests that provoke an escape on purpose)
@@ -156,6 +173,9 @@ export const test = base.extend<Fixtures>({
     await use(sink)
     await sink.close()
     await testInfo.attach('escaped-requests.json', { body: JSON.stringify(sink.escaped, null, 2), contentType: 'application/json' })
+    if (sink.background.length) {
+      await testInfo.attach('refused-background-requests.json', { body: JSON.stringify(sink.background, null, 2), contentType: 'application/json' })
+    }
     expect(sink.escaped, 'requests escaped the e2e interceptor').toEqual([])
   },
 
