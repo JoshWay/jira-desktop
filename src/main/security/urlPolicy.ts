@@ -1,9 +1,9 @@
 // Pure URL policy. No electron imports, so it stays unit-testable.
 // codex:run npm test -- tests/unit/urlPolicy.test.ts
 
-export const APP_HOST_SUFFIXES: readonly string[] = ['atlassian.net', 'atlassian.com', 'bitbucket.org', 'trello.com']
+export const APP_HOST_SUFFIXES: readonly string[] = Object.freeze(['atlassian.net', 'atlassian.com', 'bitbucket.org', 'trello.com'])
 
-export const AUTH_HOSTS: readonly string[] = [
+export const AUTH_HOSTS: readonly string[] = Object.freeze([
   'accounts.google.com',
   'login.microsoftonline.com',
   'login.live.com',
@@ -14,7 +14,7 @@ export const AUTH_HOSTS: readonly string[] = [
   'auth0.com',
   'duosecurity.com',
   'pingidentity.com'
-]
+])
 
 export type NormalizeResult = { ok: true; url: string } | { ok: false; error: string }
 
@@ -36,14 +36,24 @@ export function hostMatches(host: string, entry: string): boolean {
   return h === entry || h.endsWith('.' + entry)
 }
 
+function isAppHost(host: string): boolean {
+  return APP_HOST_SUFFIXES.some((s) => hostMatches(host, s))
+}
+
 export function isInAppUrl(url: string, configuredSiteUrl?: string): boolean {
   const u = parse(url)
   if (!u) return false
-  if (u.protocol === 'https:' && APP_HOST_SUFFIXES.some((s) => hostMatches(u.hostname, s))) return true
-  if (!configuredSiteUrl) return false
+  const appHost = isAppHost(u.hostname)
+  if (u.protocol === 'https:' && appHost) return true
+  // Plaintext is never in-app for Atlassian hosts, whatever the configured site says.
+  if (appHost || !configuredSiteUrl) return false
   const site = parse(configuredSiteUrl)
   if (!site || (site.protocol !== 'https:' && site.protocol !== 'http:')) return false
-  return u.origin === site.origin
+  return (
+    u.protocol === site.protocol &&
+    u.port === site.port &&
+    cleanHost(u.hostname) === cleanHost(site.hostname)
+  )
 }
 
 export function isAuthUrl(url: string): boolean {
@@ -77,11 +87,18 @@ export function normalizeJiraUrl(input: string): NormalizeResult {
     return { ok: false, error: 'Only http and https addresses are supported.' }
   }
   if (u.username || u.password) return { ok: false, error: 'Remove the username and password from the address.' }
-  if (!u.hostname.includes('.') && u.hostname !== 'localhost') {
+  const host = cleanHost(u.hostname)
+  if (host.endsWith('.') || host.includes('..') || host.startsWith('.')) {
+    return { ok: false, error: 'That does not look like a valid address.' }
+  }
+  if (!host.includes('.') && host !== 'localhost') {
     return { ok: false, error: 'Enter the full address, such as your-team.atlassian.net.' }
   }
+  u.hostname = host
+  // Atlassian hosts are always https; upgrade rather than reject.
+  if (isAppHost(host)) u.protocol = 'https:'
 
-  if (hostMatches(u.hostname, 'atlassian.net') && u.pathname === '/' && !u.search && !u.hash) {
+  if (hostMatches(host, 'atlassian.net') && u.pathname === '/' && !u.search && !u.hash) {
     return { ok: true, url: `${u.protocol}//${u.host}/jira` }
   }
   return { ok: true, url: u.href }

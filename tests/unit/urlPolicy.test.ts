@@ -198,3 +198,68 @@ describe('normalizeJiraUrl', () => {
     expect(err('http://exa mple.com')).toBeTruthy()
   })
 })
+
+describe('hardening (fix round 1)', () => {
+  const okUrl = (input: string) => {
+    const r = normalizeJiraUrl(input)
+    return r.ok ? r.url : null
+  }
+
+  it('freezes the allow lists at runtime', () => {
+    expect(Object.isFrozen(APP_HOST_SUFFIXES)).toBe(true)
+    expect(Object.isFrozen(AUTH_HOSTS)).toBe(true)
+  })
+
+  it('does not treat blob: URLs of the configured site as in-app', () => {
+    expect(isInAppUrl('blob:https://jira.corp.example/abc', 'https://jira.corp.example/')).toBe(false)
+    expect(isInAppUrl('blob:https://x.atlassian.net/abc')).toBe(false)
+  })
+
+  it('never treats http on an app host as in-app, even if configured as http', () => {
+    expect(isInAppUrl('http://acme.atlassian.net/', 'http://acme.atlassian.net/')).toBe(false)
+  })
+
+  it('upgrades http to https for app hosts when normalizing', () => {
+    expect(okUrl('http://acme.atlassian.net')).toBe('https://acme.atlassian.net/jira')
+    expect(okUrl('http://acme.atlassian.net/browse/A-1')).toBe('https://acme.atlassian.net/browse/A-1')
+  })
+
+  it('applies the dot rule to the host without its trailing dot', () => {
+    expect(okUrl('jira./')).toBeNull()
+    expect(okUrl('https://jira./')).toBeNull()
+    expect(okUrl('https://x.atlassian.net..')).toBeNull()
+  })
+
+  it('strips the trailing dot from normalized output', () => {
+    expect(okUrl('acme.atlassian.net.')).toBe('https://acme.atlassian.net/jira')
+    expect(okUrl('https://jira.corp.example./x')).toBe('https://jira.corp.example/x')
+  })
+
+  it('compares configured origin on trailing-dot-normalized hosts', () => {
+    expect(isInAppUrl('https://jira.corp.example./x', 'https://jira.corp.example/')).toBe(true)
+    expect(isInAppUrl('https://jira.corp.example/x', 'https://jira.corp.example./')).toBe(true)
+  })
+
+  it.each([
+    'https:evil.com',
+    'https://x.atlassian.net@evil.com',
+    'https://evil.com\\@x.atlassian.net',
+    'https://x.atlassian%2Enet.evil.io/',
+    'https://x.atlassian.net%2Eevil.io/',
+    'https://x.atl\u0430ssian.net/',
+    'https://x.atlassian.net../',
+    'blob:https://x.atlassian.net/abc',
+    'view-source:https://x.atlassian.net/',
+    'about:blank'
+  ])('isInAppUrl rejects bypass form %s', (url) => {
+    expect(isInAppUrl(url)).toBe(false)
+    expect(isInAppUrl(url, 'https://jira.corp.example/')).toBe(false)
+  })
+
+  it('normalizeJiraUrl never yields an atlassian host for bypass forms', () => {
+    for (const input of ['https://x.atlassian.net@evil.com', 'https://x.atl\u0430ssian.net/']) {
+      const u = okUrl(input)
+      expect(u === null || !isInAppUrl(u)).toBe(true)
+    }
+  })
+})
