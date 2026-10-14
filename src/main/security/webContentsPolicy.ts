@@ -7,6 +7,7 @@ import { app, session, shell } from 'electron'
 import type { Event, Session, WebContents, WebPreferences } from 'electron'
 import { LocalPageRegistry, decideNavigation, decideWindowOpen, isConfinedContents, isExpectedLoadAbort, isPermissionAllowed, toExternalHref } from './navigationPolicy'
 import type { PolicyContext } from './navigationPolicy'
+import { DropLog, TokenBucket } from './rateLimit'
 
 // App-owned pages (Task 5 dialogs, the dev server). Empty until something registers.
 const localPages = new LocalPageRegistry()
@@ -15,13 +16,67 @@ export function registerLocalPage(url: string): void {
   localPages.register(url)
 }
 
+// Remote content can call window.open or navigate in a loop with no user gesture (Electron has no
+// popup blocker), and every external open is a browser tab or a mail compose window. One app-wide
+// budget, whoever asks: a short burst, then about one a second; the rest are dropped and logged.
+const EXTERNAL_OPEN_BURST = 3
+const EXTERNAL_OPENS_PER_SECOND = 1
+const externalOpens = new TokenBucket({ burst: EXTERNAL_OPEN_BURST, refillPerSecond: EXTERNAL_OPENS_PER_SECOND })
+const externalDrops = new DropLog('openExternal rate limit')
+
 // The only path to shell.openExternal: http/https/mailto, and the parsed href, never the raw string.
-// codex:run npm test -- tests/unit/navigationPolicy.test.ts
+// False when the URL is refused or the open was dropped by the rate limit.
+// codex:run npm test -- tests/unit/navigationPolicy.test.ts tests/unit/rateLimit.test.ts
+// codex:run npm run test:e2e -- tests/e2e/security.spec.ts
 export function openExternalSafely(url: string): boolean {
   const href = toExternalHref(url)
   if (!href) return false
+  if (!externalOpens.tryTake()) {
+    externalDrops.drop(href)
+    return false
+  }
+  externalDrops.pass()
   shell.openExternal(href).catch((error: unknown) => console.error('openExternal failed:', error))
   return true
+}
+
+// Every auth-host window.open becomes a real window, and each popup gets this same policy, so a
+// popup can open more popups: the cap is app-wide, never per opener, and counts chained popups.
+// A popup holds a slot from the moment its window.open is allowed until its contents is destroyed.
+const MAX_LIVE_AUTH_POPUPS = 3
+const liveAuthPopups = new Set<WebContents>()
+const authPopupDrops = new DropLog('auth popup cap')
+
+// Allowed by the handler, window not created yet. Electron 44 creates the window before the next
+// window.open reaches any handler, so this is at most one; it keeps the cap exact if creation ever
+// becomes asynchronous. A reservation no window claims (the opener died first) expires, so a lost
+// window cannot hold a slot for good. FIFO: a created window claims the oldest reservation.
+const AUTH_POPUP_RESERVATION_MS = 10_000
+const reservations: Array<() => void> = []
+
+// codex:run npm run test:e2e -- tests/e2e/security.spec.ts
+function reserveAuthPopup(url: string): boolean {
+  if (liveAuthPopups.size + reservations.length >= MAX_LIVE_AUTH_POPUPS) {
+    authPopupDrops.drop(url)
+    return false
+  }
+  authPopupDrops.pass()
+  const release = (): void => {
+    clearTimeout(timer)
+    const index = reservations.indexOf(release)
+    if (index !== -1) reservations.splice(index, 1)
+  }
+  const timer = setTimeout(release, AUTH_POPUP_RESERVATION_MS)
+  reservations.push(release)
+  return true
+}
+
+// codex:run npm run test:e2e -- tests/e2e/security.spec.ts
+function trackAuthPopup(popup: WebContents): void {
+  reservations[0]?.()
+  if (popup.isDestroyed()) return
+  liveAuthPopups.add(popup)
+  popup.once('destroyed', () => liveAuthPopups.delete(popup))
 }
 
 // Forced onto SSO popups so they can never inherit anything from their opener
@@ -95,6 +150,7 @@ function applyContentsPolicy(contents: WebContents, getConfiguredSiteUrl: () => 
         })
         return { action: 'deny' }
       case 'auth-popup':
+        if (!reserveAuthPopup(url)) return { action: 'deny' }
         return { action: 'allow', overrideBrowserWindowOptions: { webPreferences: { ...AUTH_POPUP_WEB_PREFERENCES } } }
       case 'external':
         openExternalSafely(url)
@@ -103,6 +159,9 @@ function applyContentsPolicy(contents: WebContents, getConfiguredSiteUrl: () => 
         return { action: 'deny' }
     }
   })
+
+  // Only auth popups are ever allowed, so every window this contents creates is one
+  contents.on('did-create-window', (win) => trackAuthPopup(win.webContents))
 
   // codex:run npm run test:e2e -- tests/e2e/security.spec.ts
   const guard = (event: Event<{ url: string; isMainFrame: boolean }>): void => {

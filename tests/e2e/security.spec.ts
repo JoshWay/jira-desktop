@@ -144,6 +144,9 @@ test('navigation to a look-alike host is blocked and handed to the browser; non-
   expect(page.url()).toBe(START_URL)
   expect((await app.requests()).map((r) => r.url)).not.toContain(lookAlike)
 
+  // Three more external opens back to back: let the app-wide budget (a burst of 3, refilled at
+  // about one a second) fill up again first. Time passing is all this needs, so load cannot break it.
+  await page.waitForTimeout(1_100)
   for (const url of ['https://evilatlassian.net/', 'http://team.atlassian.net/', 'mailto:a@b.test']) {
     expect(await navigate(app, page, url)).toMatchObject({ prevented: true })
   }
@@ -250,6 +253,73 @@ test('window.open: auth opens a sandboxed child under the same policy; smb: crea
   expect(await page.evaluate(() => window.open('https://team.atlassian.net/browse/X-1') === null)).toBe(true)
   await expect(page).toHaveURL('https://team.atlassian.net/browse/X-1')
   expect(await windowCount()).toBe(2)
+})
+
+// Electron has no popup blocker, so a page on a suffix-matched IdP tenant could loop window.open.
+// The cap is app-wide and counts popups opened by popups; a closed popup frees its slot.
+// codex:run npm run test:e2e -- tests/e2e/security.spec.ts -g "auth popups are capped"
+test('window.open: live auth popups are capped app-wide, chained popups included', async ({ launchApp }) => {
+  const app = await launchApp()
+  const page = await app.electronApp.firstWindow()
+  await expect(page).toHaveURL(START_URL)
+  const windowCount = () => app.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)
+  const CAP = 3
+
+  const opened = await page.evaluate(() =>
+    Array.from({ length: 20 }, (_, i) => window.open(`https://evil.us.auth0.com/flood/${i}`) !== null)
+  )
+  // window.open runs the handler synchronously, so this is final: the first CAP got windows
+  expect(opened).toEqual(Array.from({ length: 20 }, (_, i) => i < CAP))
+  expect(await windowCount()).toBe(1 + CAP)
+
+  // A popup is governed by the same, shared cap: it cannot open more
+  const popup = app.electronApp.windows().find((p) => p.url().startsWith('https://evil.us.auth0.com/flood/'))
+    ?? (await app.electronApp.waitForEvent('window', { predicate: (p) => p.url().startsWith('https://evil.us.auth0.com/flood/') }))
+  await expect(popup).toHaveURL(/^https:\/\/evil\.us\.auth0\.com\/flood\//)
+  expect(await popup.evaluate(() => Array.from({ length: 5 }, () => window.open('https://login.microsoftonline.com/chain') !== null))).toEqual(
+    [false, false, false, false, false]
+  )
+  expect(await windowCount()).toBe(1 + CAP)
+
+  // Closing one frees exactly one slot
+  await app.electronApp.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().startsWith('https://evil.us.auth0.com/flood/'))!.destroy()
+  })
+  await expect.poll(windowCount).toBe(CAP)
+  await expect.poll(() => page.evaluate(() => window.open('https://accounts.google.com/again') !== null)).toBe(true)
+  expect(await page.evaluate(() => window.open('https://accounts.google.com/over') !== null)).toBe(false)
+  expect(await windowCount()).toBe(1 + CAP)
+  expect(await app.stubCalls('shell', 'openExternal')).toEqual([])
+})
+
+// The external-open flood (window.open or navigation loops to the browser or mail client) is
+// limited by one app-wide token bucket: a burst of 3, then about one a second. The bound allows
+// for whatever refilled while the loop ran, so a slow machine cannot make it flaky.
+// codex:run npm run test:e2e -- tests/e2e/security.spec.ts -g "external opens are rate limited"
+test('window.open: external opens are rate limited app-wide', async ({ launchApp }) => {
+  const app = await launchApp()
+  const page = await app.electronApp.firstWindow()
+  await expect(page).toHaveURL(START_URL)
+  const BURST = 3
+
+  const started = await app.electronApp.evaluate(() => Date.now())
+  const results = await page.evaluate(() => Array.from({ length: 20 }, (_, i) => window.open(`https://example.com/flood/${i}`) === null))
+  const elapsedMs = (await app.electronApp.evaluate(() => Date.now())) - started
+  expect(results.every(Boolean)).toBe(true)
+
+  // The handler ran synchronously for every call, so the recorder is final
+  const calls = await app.stubCalls('shell', 'openExternal')
+  expect(calls.length).toBeGreaterThanOrEqual(BURST)
+  expect(calls.length).toBeLessThanOrEqual(BURST + Math.floor(elapsedMs / 1000))
+  // In order, from the start of the loop
+  expect(calls.slice(0, BURST)).toEqual([['https://example.com/flood/0'], ['https://example.com/flood/1'], ['https://example.com/flood/2']])
+  expect(await app.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1)
+
+  // The budget refills: after a pause, opens get through again
+  await expect.poll(async () => {
+    await page.evaluate(() => { window.open('https://example.com/later') })
+    return (await app.stubCalls('shell', 'openExternal')).some(([url]) => url === 'https://example.com/later')
+  }, { timeout: 10_000, intervals: [500] }).toBe(true)
 })
 
 test('permissions: in-app content gets notifications but not media; other origins get nothing', async ({ launchApp }) => {
