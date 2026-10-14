@@ -1,6 +1,6 @@
 {
   "name": "jira-desktop-app",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Modern Jira Desktop App built with Electron",
   "main": "dist/main/main.js",
   "author": {
@@ -14,9 +14,10 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder",
+    "dist": "electron-builder && npm run clean-blockmap",
     "dist:all": "electron-builder -mwl",
-    "clean": "rimraf dist out"
+    "clean": "rimraf dist out",
+    "clean-blockmap": "rm -f release/*.blockmap"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
@@ -36,6 +37,7 @@
     "directories": {
       "output": "release"
     },
+    "publish": null,
     "files": [
       "dist/**/*",
       "node_modules/**/*",
@@ -53,9 +55,7 @@
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "resources/icon.icns",
-      "hardenedRuntime": true,
-      "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist",
+      "hardenedRuntime": false,
       "target": [
         {
           "target": "dmg",
