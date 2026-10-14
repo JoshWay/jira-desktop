@@ -6,6 +6,8 @@ import { ContextMenuService } from './services/ContextMenuService'
 import { installWebContentsPolicy } from './security/webContentsPolicy'
 import { isExpectedLoadAbort } from './security/navigationPolicy'
 import { DialogController } from './dialogs/DialogController'
+import { createSettingsStore } from './services/settings'
+import type { SettingsStore } from './services/settings'
 
 class JiraApp {
   private mainWindow: BrowserWindow | null = null
@@ -14,8 +16,11 @@ class JiraApp {
   private windowManager: WindowManager
   private contextMenuService: ContextMenuService
   private dialogs: DialogController
+  private settings: SettingsStore
 
   constructor() {
+    // Both stores load synchronously, so they are ready before anything reads them (spec R3)
+    this.settings = createSettingsStore()
     this.windowManager = new WindowManager()
     this.contextMenuService = new ContextMenuService(this.windowManager, () => this.jiraUrl)
     // Registers the dialog IPC channels once, at startup (spec R2)
@@ -60,10 +65,19 @@ class JiraApp {
       }
     })
 
-    // Handle app termination
+    // Handle app termination. Pending debounced writes are flushed synchronously; will-quit
+    // flushes again for state saved while the windows were closing.
+    // codex:run npm run test:e2e -- tests/e2e/storage.spec.ts
     app.on('before-quit', () => {
       this.windowManager.closeAllWindows()
+      this.flushStorage()
     })
+    app.on('will-quit', () => this.flushStorage())
+  }
+
+  private flushStorage(): void {
+    this.windowManager.flush()
+    this.settings.flush()
   }
 
   private createWindow(): void {

@@ -30,10 +30,15 @@ export interface WindowState {
   isMinimized: boolean
 }
 
+// Shape of window-states.json
+interface WindowStatesFile {
+  windowStates?: WindowState[]
+}
+
 export class WindowManager {
   private windows: Map<string, BrowserWindow> = new Map()
   private windowStates: Map<string, WindowState> = new Map()
-  private storage: StorageService
+  private storage: StorageService<WindowStatesFile>
   private saveStateTimeout: NodeJS.Timeout | null = null
 
   private readonly products: Map<string, AtlassianProduct> = new Map([
@@ -88,7 +93,9 @@ export class WindowManager {
   ])
 
   constructor() {
-    this.storage = new StorageService('window-states.json')
+    // StorageService loads synchronously, so saved states are available here (spec R3)
+    // codex:run npm test -- tests/unit/WindowManager.test.ts
+    this.storage = new StorageService<WindowStatesFile>('window-states.json')
     this.loadWindowStates()
   }
 
@@ -203,6 +210,17 @@ export class WindowManager {
     return Array.from(this.windows.values()).filter(w => !w.isDestroyed())
   }
 
+  // Writes pending window states to disk now; the quit path calls it
+  // codex:run npm test -- tests/unit/WindowManager.test.ts
+  public flush(): void {
+    if (this.saveStateTimeout) {
+      clearTimeout(this.saveStateTimeout)
+      this.saveStateTimeout = null
+      this.saveWindowStates()
+    }
+    this.storage.flush()
+  }
+
   public closeAllWindows(): void {
     // Clear any pending save operations
     if (this.saveStateTimeout) {
@@ -280,7 +298,7 @@ export class WindowManager {
 
   private loadWindowStates(): void {
     try {
-      const states = this.storage.get<WindowState[]>('windowStates', [])
+      const states = this.storage.get('windowStates', [])
       this.windowStates.clear()
       
       for (const state of states) {
