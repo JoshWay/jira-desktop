@@ -39,10 +39,13 @@ Only one copy of the app runs per profile. Launching it again brings the running
 
 | Menu | Item | Shortcut |
 |------|------|----------|
+| Jira Desktop | About | |
 | Jira Desktop | Set Jira URL… | `Cmd/Ctrl+U` |
 | Jira Desktop | Check for Updates… | |
 | Jira Desktop | New Atlassian Window… | `Cmd/Ctrl+Shift+N` |
 | Jira Desktop | Close All Windows (the extra Atlassian windows) | `Cmd/Ctrl+Shift+W` |
+| Jira Desktop | Hide, Hide Others, Show All (macOS) | `Cmd+H`, `Cmd+Option+H`, none |
+| Jira Desktop | Quit (Exit on Windows) | `Cmd/Ctrl+Q` (none on Windows) |
 | Edit | Undo, Redo, Cut, Copy, Paste, Select All | standard |
 | Edit | Find… | `Cmd/Ctrl+F` |
 | View | Reload / Force Reload | `Cmd/Ctrl+R` / `Cmd/Ctrl+Shift+R` |
@@ -61,7 +64,7 @@ Only one copy of the app runs per profile. Launching it again brings the running
 - **New Atlassian Window** opens an Atlassian address (or a page on your own site) in a separate window, with a product choice (auto-detect, Jira, Confluence, Bitbucket, Trello) and an option to open it in the background. Asking for the same product and page again focuses the window that is already open. These windows share the main window's login and remember their size and position.
 - Right-clicking in the main window offers Copy / Cut / Paste where they apply, **Open … in New Window / in Background** for Atlassian links, and Back, Forward and Reload.
 
-On macOS, closing the main window leaves the app running. Click the Dock icon to open it again.
+On macOS, closing windows leaves the app running. Clicking the Dock icon opens a new main window only when no app window is open. If an extra Atlassian window is still open, close it first (**Close All Windows**, `Cmd+Shift+W`) and then click the Dock icon, or quit and reopen the app. On Windows and Linux, the app quits when its last window closes.
 
 ## How links behave
 
@@ -76,7 +79,14 @@ Known limitation: single sign-on through an identity provider that is not on tha
 
 ## Settings and data
 
-Everything lives in the app's user-data folder. On macOS that is `~/Library/Application Support/Jira Desktop`.
+Everything lives in the app's user-data folder. Electron names it after the `name` in `package.json`, `jira-desktop-app`, not after the "Jira Desktop" display name:
+
+| Platform | User-data folder |
+|----------|------------------|
+| macOS | `~/Library/Application Support/jira-desktop-app` |
+| Windows | `%APPDATA%\jira-desktop-app` |
+| Linux | `$XDG_CONFIG_HOME/jira-desktop-app`, which is `~/.config/jira-desktop-app` by default |
+
 
 - `settings.json` stores the Jira address, the Appearance choice, the main window's size, position and maximized state, and any update version you chose to skip.
 - `window-states.json` stores the size and position of extra Atlassian windows.
@@ -98,7 +108,9 @@ Only packaged builds check for updates. They check once, a few seconds after lau
 
 Development builds never check. Choosing **Check for Updates…** in one says so.
 
-Update integrity rests on the SHA-512 hashes in the release's `latest*.yml`. On Windows, electron-updater also verifies the installer's Authenticode publisher, but only for builds that were signed. On macOS, installing an update requires a signed build.
+Update integrity rests on the SHA-512 hashes in the release's `latest*.yml`. On Windows, electron-updater also verifies the installer's Authenticode publisher, but only for builds that were signed.
+
+On macOS, an update installs only when it is signed to match the running app. A release built without the macOS signing credentials therefore publishes no macOS update feed (`latest-mac.yml`). Installed Mac copies get no update offer from it: the automatic check stays silent, and **Check for Updates…** reports that the check failed. Download that release's `.dmg` from GitHub Releases instead.
 
 ## Security model
 
@@ -135,7 +147,7 @@ npm test            # unit tests (vitest)
 npm run test:e2e    # builds, then end-to-end tests (Playwright driving Electron)
 ```
 
-- **Unit tests** (`tests/unit/`) cover the pure policy and rules modules: URL policy, navigation policy, dialog rules, storage, window bounds, updates, user agent, find and navigation rules.
+- **Unit tests** (`tests/unit/`) cover the pure policy and rules modules: URL policy, navigation policy, rate limits, dialog rules, storage, window bounds, updates, user agent, find and navigation rules, and the release tag check.
 - **End-to-end tests** (`tests/e2e/`) launch the real built app. The harness in `tests/e2e/helpers/` keeps every run offline. It answers every http/https request inside the app, sends anything that slips past to a loopback sink that fails the test, and replaces `shell.openExternal`, `shell.openPath` and `dialog.showErrorBox` with recorders. Each launch gets a fresh temporary profile.
 - E2E windows stay off-screen, transparent and unable to take focus, so a run does not take over your screen. A test fails if any window takes focus. For debugging only, `JIRA_DESKTOP_E2E_HEADED=1 npm run test:e2e` shows normal windows and skips the focus check. Never use it for a real gate run.
 - On Linux the e2e tests need a display. CI runs them under `xvfb-run`.
@@ -153,12 +165,17 @@ Signing and notarization are skipped when no credentials are set. electron-build
 
 ## Releases
 
-`.github/workflows/release.yml` runs on pushes and pull requests to `main` and `dev`, and on `v*` tags.
+`.github/workflows/release.yml` runs on pushes to `main` and `dev`, on every pull request whatever its base branch, and on `v*` tags.
 
-1. On Ubuntu, Windows and macOS, it runs `npm ci`, the typecheck, the unit tests and the e2e tests, then builds and packages. It uploads the packages, the `latest*.yml` updater metadata and the blockmaps as workflow artifacts.
-2. For a `v*` tag only, a release job publishes those files as a GitHub Release. Tags containing `alpha`, `beta` or `rc` are marked as pre-releases.
+1. On a `v*` tag, each build first checks that the tag is exactly `v` followed by the `version` in `package.json` (`scripts/release-version.mjs`). If it is not, the build fails before dependencies are installed.
+2. On Ubuntu, Windows and macOS, it runs `npm ci`, the typecheck, the unit tests and the e2e tests, then builds and packages. It uploads the packages, the `latest*.yml` updater metadata and the blockmaps as workflow artifacts.
+3. For a `v*` tag only, a release job publishes those files as a GitHub Release. The release is marked as a pre-release when the version has a semver pre-release part (`2.2.0-rc.1`). Build metadata (`2.2.0+build.5`) does not make it a pre-release.
 
-To release, bump `version` in `package.json` on `dev`, merge to `main`, then tag that commit `v<version>`. Signing runs when the repository secrets `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`, `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` are set. Pull requests are never signed. Third-party actions are pinned to commit SHAs, and only the release job has write permission.
+To release, bump `version` in `package.json` on `dev`, merge to `main`, then tag that commit `v<version>`.
+
+- Signing and notarization run only on `v*` tag builds, and only for the platforms whose repository secrets are set: `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` for macOS, `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` for Windows. Branch pushes and pull requests are never signed.
+- Without `MAC_CSC_LINK`, the macOS build is only ad-hoc signed and cannot install as an in-app update. The tag build then drops `latest-mac.yml` and the zip blockmaps and logs a warning. The `.dmg` and `.zip` are still published for manual download (see [Updates](#updates)). The Windows and Linux feeds are published either way.
+- Third-party actions are pinned to commit SHAs, and only the release job has write permission.
 
 ## Contributing
 

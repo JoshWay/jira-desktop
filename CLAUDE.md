@@ -49,7 +49,8 @@ src/
 │   │   │                           #   registerPrivilegedContents, isLocalPageUrl, openExternalSafely
 │   │   ├── localPageUrl.ts         # where a src/renderer page loads from (built file, or dev server when unpackaged)
 │   │   ├── localPageSender.ts      # pure IPC sender check (exact contents + main frame + exact page path)
-│   │   └── localPageIpc.ts         # handleFromLocalPage / handleFromAnyLocalPage (ipcMain.handle wrappers)
+│   │   ├── localPageIpc.ts         # handleFromLocalPage / handleFromAnyLocalPage (ipcMain.handle wrappers)
+│   │   └── rateLimit.ts            # pure: token bucket for external opens, throttled drop logging
 │   ├── dialogs/
 │   │   ├── DialogController.ts     # the one dialog window: set-url, new-window, welcome, load-error
 │   │   └── dialogRules.ts          # pure payload parsing + per-mode URL validation
@@ -80,6 +81,9 @@ src/
 └── shared/                         # contracts between main, preload and renderer (no electron or DOM imports)
     ├── dialog.ts
     └── find.ts
+
+scripts/
+└── release-version.mjs             # CI tag guard: tag must be v + package.json version; derives prerelease
 ```
 
 How it fits together:
@@ -91,7 +95,11 @@ How it fits together:
 - **StorageService** loads synchronously in its constructor and writes atomically (tmp file, fsync, rename). Writes are debounced, and `flush()` runs on `before-quit` and `will-quit`. A corrupt file is renamed to `<file>.corrupt-<n>`. `get` and `set` return JSON copies.
 - **Updates**: `UpdateController` never constructs the updater unless `app.isPackaged`. The feed is the `app-update.yml` that electron-builder generates from `build.publish`. `autoDownload` is false: nothing downloads until the user picks Update Now.
 - **Packaging** (`package.json` → `build`): fuses (RunAsNode off, NODE_OPTIONS off, CLI inspect off, cookie encryption on, asar integrity on, only-load-from-asar on), the hardened runtime and `build/entitlements.mac.plist` (allow-jit and network.client only). Icons come from `resources/`, copied via `extraResources`.
-- **CI** (`.github/workflows/release.yml`): on ubuntu/windows/macos it runs typecheck, unit tests, e2e (under xvfb on Linux), build and package. The `release` job publishes to GitHub Releases on `v*` tags. Actions are pinned to SHAs, with `permissions: contents: read` except on the release job.
+  - The user-data folder is named after the top-level `package.json` `name` (`jira-desktop-app`); `build.productName` only names the bundle and artifacts. Do not add a top-level `productName` without a profile migration: it would move every user's settings, cookies and login to a new, empty folder.
+- **CI** (`.github/workflows/release.yml`): runs on pushes to `main`/`dev`, on every pull request (any base branch, so stacked PRs get the full matrix) and on `v*` tags. On ubuntu/windows/macos it runs typecheck, unit tests, e2e (under xvfb on Linux), build and package. The `release` job publishes to GitHub Releases on `v*` tags. Actions are pinned to SHAs, with `permissions: contents: read` except on the release job.
+  - Tag builds first run `scripts/release-version.mjs`: the tag must be exactly `v` + `package.json` `version`, and the prerelease flag comes from the semver pre-release part, not a substring of the ref.
+  - Signing secrets are passed to electron-builder on `v*` tag builds only. Branch pushes and PRs are never signed.
+  - Without `MAC_CSC_LINK` the mac build is ad-hoc signed, which Squirrel.Mac will not install as an update, so the tag build deletes `latest-mac.yml` and the zip blockmaps. Mac users then download releases manually, and a manual update check in the app reports a failed check (electron-updater gets a 404 for the missing feed).
 
 ## Security invariants (must always hold)
 
@@ -116,7 +124,7 @@ Follow `DialogController.ts` (a window) or `FindBarController.ts` (a view):
 
 ## Testing
 
-- **Unit** (`tests/unit/`): logic lives in pure modules with no electron imports (`*Rules.ts`, `urlPolicy.ts`, `navigationPolicy.ts`, `localPageSender.ts`, `userAgent.ts`, `windowBounds.ts`, `appIcon.ts`), so vitest runs them in Node. Electron-facing classes are tested with fakes where practical (`StorageService`, `WindowManager`, `UpdateController`, `ContextMenuService`).
+- **Unit** (`tests/unit/`): logic lives in pure modules with no electron imports (`*Rules.ts`, `urlPolicy.ts`, `navigationPolicy.ts`, `localPageSender.ts`, `rateLimit.ts`, `userAgent.ts`, `windowBounds.ts`, `appIcon.ts`, `scripts/release-version.mjs`), so vitest runs them in Node. Electron-facing classes are tested with fakes where practical (`StorageService`, `WindowManager`, `UpdateController`, `ContextMenuService`).
 - **E2E** (`tests/e2e/`): read the header comments of `tests/e2e/helpers/intercept-main.ts` and `tests/e2e/helpers/app.ts` before writing a test.
   - The harness preloads `intercept-main.ts` into the main process (`-r`, only with `JIRA_DESKTOP_E2E=1`). It serves every http/https request via `protocol.handle` on every session. Tests configure responses with `routes`, and the default site is `E2E_SITE_URL` (`https://e2e.atlassian.net/jira`). It points every session's proxy at a loopback escape sink, and any request that reaches the sink fails the test. It also refuses Chromium's OS protocol hand-off.
   - Runs are **offline**. No request may leave the machine during `npm test` or `npm run test:e2e`.
@@ -141,5 +149,5 @@ Follow `DialogController.ts` (a window) or `FindBarController.ts` (a view):
   - Use `hotfix/<name>`, branched from `main`, for urgent fixes. It merges to both `main` and `dev` via PRs.
 - Commits use Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`, `style:`), with no signatures, co-author trailers or unrelated notes.
 - PR titles use Conventional Commits too. CI must pass, and the PR should say how the change was tested.
-- Releases: bump `version` in `package.json`, merge `dev` to `main`, and tag `v<version>`. The workflow publishes the GitHub Release.
+- Releases: bump `version` in `package.json`, merge `dev` to `main`, and tag exactly `v<version>` (CI refuses any other tag). The workflow publishes the GitHub Release.
 - `.gitrules` has the full rules for LLM assistants (worktrees, safety checks).
