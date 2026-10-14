@@ -68,6 +68,14 @@ describe('localPageKey', () => {
       expect(localPageKey(url)).toBeNull()
     }
   })
+  // Node's pathToFileURL keeps a lowercase drive letter; Chromium's committed URL uppercases it
+  it('canonicalises a Windows drive letter to uppercase, and nothing else in the path', () => {
+    expect(localPageKey('file:///c:/Program%20Files/Jira/resources/app.asar/dist/renderer/dialog.html')).toBe(
+      'file:///C:/Program%20Files/Jira/resources/app.asar/dist/renderer/dialog.html'
+    )
+    expect(localPageKey('file:///c:/app/dialog.html')).toBe(localPageKey('file:///C:/app/dialog.html'))
+    expect(localPageKey('file:///C:/App/dialog.html')).not.toBe(localPageKey('file:///C:/app/dialog.html'))
+  })
 })
 
 describe('isConfinedContents', () => {
@@ -130,6 +138,14 @@ describe('isSameLocalPage', () => {
     expect(isSameLocalPage('http://localhost:5174/dialog.html', 'http://localhost:5173/dialog.html')).toBe(false)
     expect(isSameLocalPage('https://localhost:5173/dialog.html', 'http://localhost:5173/dialog.html')).toBe(false)
   })
+  it('matches across Windows drive-letter case (Node lowercase vs Chromium uppercase) only', () => {
+    const fromNode = 'file:///c:/users/me/jira/resources/app.asar/dist/renderer/dialog.html'
+    const fromChromium = 'file:///C:/users/me/jira/resources/app.asar/dist/renderer/dialog.html?mode=welcome'
+    expect(isSameLocalPage(fromChromium, fromNode)).toBe(true)
+    expect(isSameLocalPage(fromNode, fromChromium)).toBe(true)
+    expect(isSameLocalPage('file:///D:/users/me/jira/resources/app.asar/dist/renderer/dialog.html', fromNode)).toBe(false)
+    expect(isSameLocalPage('file:///C:/Users/me/jira/resources/app.asar/dist/renderer/dialog.html', fromNode)).toBe(false)
+  })
   it('never matches when the expected page itself is not a local page URL', () => {
     expect(isSameLocalPage('about:blank', 'about:blank')).toBe(false)
     expect(isSameLocalPage('data:text/html,x', 'data:text/html,x')).toBe(false)
@@ -158,6 +174,13 @@ describe('LocalPageRegistry', () => {
     expect(registry.matches('file:///app/dist/renderer/other.html')).toBe(false)
     expect(registry.matches('file:///app/dist/renderer/')).toBe(false)
     expect(registry.matches('file:///etc/passwd')).toBe(false)
+  })
+  it('matches a page registered from a lowercase Windows drive when Chromium reports it uppercase', () => {
+    const registry = new LocalPageRegistry()
+    registry.register('file:///c:/app/dist/renderer/dialog.html')
+    expect(registry.matches('file:///C:/app/dist/renderer/dialog.html?mode=x')).toBe(true)
+    expect(registry.matches('file:///c:/app/dist/renderer/dialog.html')).toBe(true)
+    expect(registry.matches('file:///D:/app/dist/renderer/dialog.html')).toBe(false)
   })
   it('rejects registrations that are not local-page URLs', () => {
     const registry = new LocalPageRegistry()

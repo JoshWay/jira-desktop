@@ -73,13 +73,22 @@ export function isExpectedLoadAbort(error: unknown): boolean {
   return (error as { code?: unknown } | null)?.code === 'ERR_ABORTED'
 }
 
+// A file: URL's path with a Windows drive letter in Chromium's canonical case. Node's
+// pathToFileURL keeps the case it is given (file:///c:/...) while Chromium's canonicalizer
+// uppercases the drive letter (file:///C:/...), so both sides of a comparison go through this.
+// Only the drive letter: the rest of the path stays case-sensitive, as Chromium leaves it.
+// codex:run npm test -- tests/unit/navigationPolicy.test.ts
+function canonicalFilePath(pathname: string): string {
+  return pathname.replace(/^\/([a-z]):/, (_, drive: string) => `/${drive.toUpperCase()}:`)
+}
+
 // The identity of an app-owned page: exact origin for http(s) (the dev server), exact path for
 // file: (packaged builds). Query and hash never matter. Anything else cannot be a local page.
 export function localPageKey(url: string): string | null {
   const u = parse(url)
   if (!u) return null
   if (u.protocol === 'http:' || u.protocol === 'https:') return u.origin
-  if (u.protocol === 'file:') return `file://${u.host}${u.pathname}`
+  if (u.protocol === 'file:') return `file://${u.host}${canonicalFilePath(u.pathname)}`
   return null
 }
 
@@ -90,7 +99,7 @@ export function isSameLocalPage(url: string, pageUrl: string): boolean {
   const path = (value: string): string | null => {
     const u = parse(value)
     if (!u || (u.protocol !== 'http:' && u.protocol !== 'https:' && u.protocol !== 'file:')) return null
-    return `${u.protocol}//${u.host}${u.pathname}`
+    return `${u.protocol}//${u.host}${u.protocol === 'file:' ? canonicalFilePath(u.pathname) : u.pathname}`
   }
   const actual = path(url)
   return actual !== null && actual === path(pageUrl)
