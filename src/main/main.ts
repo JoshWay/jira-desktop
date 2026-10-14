@@ -608,7 +608,7 @@ class JiraApp {
     })
   }
 
-  private showUpdateErrorDialog(errorMessage: string): void {
+  private showUpdateErrorDialog(_errorMessage: string): void {
     dialog.showMessageBox(this.mainWindow!, {
       type: 'warning',
       title: 'Update Check Failed',
