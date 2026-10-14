@@ -258,6 +258,21 @@ describe('Settings', () => {
     expect(sanitizeSettings({ mainWindow })).toEqual({})
   })
 
+  it('keeps a skipped update version and drops one that is not a non-empty string', () => {
+    expect(sanitizeSettings({ skippedVersion: '2.2.0' })).toEqual({ skippedVersion: '2.2.0' })
+    expect(sanitizeSettings({ skippedVersion: 220 })).toEqual({})
+    expect(sanitizeSettings({ skippedVersion: '' })).toEqual({})
+  })
+
+  it('persists the skipped update version across a reload', () => {
+    const settings = createSettingsStore()
+    settings.set('skippedVersion', '2.2.0')
+    settings.flush()
+    const reloaded = createSettingsStore()
+    const skipped: Settings['skippedVersion'] = reloaded.get('skippedVersion')
+    expect(skipped).toBe('2.2.0')
+  })
+
   it('sanitizes on load', () => {
     writeFileSync(join(env.userData, SETTINGS_FILE), JSON.stringify({ themeSource: 'purple', jiraUrl: 'https://a.atlassian.net/jira' }))
     const settings = createSettingsStore()

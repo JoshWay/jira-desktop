@@ -210,3 +210,22 @@ describe('WindowManager onWindowCreated', () => {
     expect(await manager.createWindow({ url: URL, product: manager.identifyProduct(URL)! })).not.toBeNull()
   })
 })
+
+describe('WindowManager icons', () => {
+  it('asks the icon resolver for the product icon', async () => {
+    const asked: string[] = []
+    const manager = new WindowManager(undefined, (file) => {
+      asked.push(file)
+      return `/resolved/${file}`
+    })
+    await manager.createWindow({ url: URL, product: manager.identifyProduct(URL)! })
+    expect(asked).toEqual(['confluence-icon.png'])
+    expect(fake.created[0]!.options.icon).toBe('/resolved/confluence-icon.png')
+  })
+
+  it('leaves the icon to Electron without a resolver', async () => {
+    const manager = new WindowManager()
+    await manager.createWindow({ url: URL, product: manager.identifyProduct(URL)! })
+    expect(fake.created[0]!.options.icon).toBeUndefined()
+  })
+})
