@@ -7,8 +7,8 @@
 // Writes `version=` and `prerelease=` to $GITHUB_OUTPUT when it is set.
 // codex:run npm test -- tests/unit/releaseVersion.test.ts
 
-import { appendFileSync, readFileSync } from 'node:fs'
-import { pathToFileURL } from 'node:url'
+import { appendFileSync, readFileSync, realpathSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 // https://semver.org/#is-there-a-suggested-regular-expression-regex-to-check-a-semver-string
 const SEMVER =
@@ -54,4 +54,15 @@ function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main()
+// Compare real paths: import.meta.url is already resolved, argv[1] may reach the script through a
+// symlink or a relative/non-canonical path. A mismatch here would skip main() and pass the guard.
+function isEntryPoint() {
+  if (!process.argv[1]) return false
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+  } catch {
+    return false
+  }
+}
+
+if (isEntryPoint()) main()
