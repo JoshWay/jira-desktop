@@ -26,14 +26,19 @@ test('saved window states survive a launch and quit, written atomically on quit'
       isMinimized: false
     }]
   }
-  await writeFile(join(userDataDir, 'window-states.json'), JSON.stringify(saved))
+  // Seeded compact; the store writes pretty-printed. So the file only changes if the app
+  // rewrites it, which proves the quit path wrote rather than left the seed in place.
+  const seed = JSON.stringify(saved)
+  await writeFile(join(userDataDir, 'window-states.json'), seed)
 
   const app = await launchApp({ userDataDir })
   await app.electronApp.firstWindow()
+  // Loading must not rewrite the file; only the quit flush does
+  expect(await readFile(join(userDataDir, 'window-states.json'), 'utf-8')).toBe(seed)
   // Quitting saves the window states that were loaded at startup and flushes them in before-quit
   await app.close()
 
-  expect(JSON.parse(await readFile(join(userDataDir, 'window-states.json'), 'utf-8'))).toEqual(saved)
+  expect(await readFile(join(userDataDir, 'window-states.json'), 'utf-8')).toBe(JSON.stringify(saved, null, 2))
   const files = await readdir(userDataDir)
   expect(files.filter((name) => name.endsWith('.tmp'))).toEqual([])
 })
