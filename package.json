@@ -14,10 +14,9 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder && npm run clean-blockmap",
+    "dist": "electron-builder",
     "dist:all": "electron-builder -mwl",
-    "clean": "rimraf dist out",
-    "clean-blockmap": "rm -f release/*.blockmap",
+    "clean": "rimraf dist out release",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -43,10 +42,16 @@
     "directories": {
       "output": "release"
     },
-    "publish": null,
+    "artifactName": "Jira-Desktop-${version}-${os}-${arch}.${ext}",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "JoshWay",
+        "repo": "jira-desktop"
+      }
+    ],
     "files": [
       "dist/**/*",
-      "node_modules/**/*",
       "package.json"
     ],
     "extraResources": [
@@ -58,13 +63,31 @@
         ]
       }
     ],
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableCookieEncryption": true,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "resetAdHocDarwinSignature": true
+    },
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "resources/icon.icns",
-      "hardenedRuntime": false,
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
       "target": [
         {
           "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
           "arch": [
             "x64",
             "arm64"
@@ -74,10 +97,9 @@
     },
     "win": {
       "icon": "resources/icon.ico",
-      "publisherName": "JoshWay",
       "target": [
         {
-          "target": "msi",
+          "target": "nsis",
           "arch": [
             "x64"
           ]
