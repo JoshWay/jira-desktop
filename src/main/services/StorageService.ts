@@ -9,7 +9,6 @@ export interface StorageData {
 export class StorageService {
   private dataPath: string
   private data: StorageData = {}
-  private isLoaded: boolean = false
 
   constructor(fileName: string = 'app-data.json') {
     this.dataPath = join(app.getPath('userData'), fileName)
@@ -48,11 +47,9 @@ export class StorageService {
       await access(this.dataPath)
       const fileContent = await readFile(this.dataPath, 'utf-8')
       this.data = JSON.parse(fileContent)
-      this.isLoaded = true
     } catch (error) {
       // File doesn't exist or is unreadable - start with empty data
       this.data = {}
-      this.isLoaded = true
     }
   }
 

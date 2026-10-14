@@ -1,6 +1,6 @@
 import { app, BrowserWindow, Menu, nativeTheme, ipcMain, shell, dialog } from 'electron'
 import { autoUpdater } from 'electron-updater'
-import { join } from 'path'
+import { join, resolve } from 'path'
 import { WindowManager } from './services/WindowManager'
 import { ContextMenuService } from './services/ContextMenuService'
 
@@ -608,7 +608,7 @@ class JiraApp {
     })
   }
 
-  private showUpdateErrorDialog(errorMessage: string): void {
+  private showUpdateErrorDialog(_errorMessage: string): void {
     dialog.showMessageBox(this.mainWindow!, {
       type: 'warning',
       title: 'Update Check Failed',
@@ -617,6 +617,14 @@ class JiraApp {
       buttons: ['OK']
     })
   }
+}
+
+// Test isolation: JIRA_DESKTOP_USER_DATA_DIR redirects the whole profile (must run before 'ready'
+// and before JiraApp constructs services that read the userData path)
+// codex:run npm run test:e2e -- tests/e2e/smoke.spec.ts
+const userDataDirOverride = process.env.JIRA_DESKTOP_USER_DATA_DIR
+if (userDataDirOverride) {
+  app.setPath('userData', resolve(userDataDirOverride))
 }
 
 // Initialize the app

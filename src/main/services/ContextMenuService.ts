@@ -216,7 +216,7 @@ export class ContextMenuService {
       this.emitTelemetryEvent('window_spawn_failed', {
         product: product?.id || 'unknown',
         url: new URL(url).hostname,
-        error: error.message
+        error: error instanceof Error ? error.message : String(error)
       })
     }
   }

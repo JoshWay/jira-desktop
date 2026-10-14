@@ -1,0 +1,209 @@
+import { test as base, expect, _electron } from '@playwright/test'
+import type { ElectronApplication } from '@playwright/test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { createServer } from 'node:net'
+import type { Server, Socket } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import type { EscapedRequest, InterceptedRequest, Route, StubSpec } from './types'
+
+export type { EscapedRequest, InterceptedRequest, Route, RouteResponse, StubSpec } from './types'
+export { expect }
+
+const repoRoot = resolve(__dirname, '../../..')
+const interceptModule = resolve(__dirname, 'intercept-main.ts')
+
+// Chromium background requests the app cannot switch off before they start. They are still
+// refused like every other request (nothing ever leaves the machine), but recorded apart so they
+// don't fail every test. Keep this exact and per-platform; anything else that reaches the sink is
+// an escape.
+// - Linux: Electron spell-checks with Hunspell and fetches the locale's dictionary
+//   (/edgedl/chrome/dict/<locale>.bdic) while the profile loads, ahead of any app or harness hook;
+//   neither setSpellCheckerEnabled(false) nor a seeded Preferences file stops it (netlog-verified).
+// codex:run npm run test:e2e -- tests/e2e/harness.spec.ts
+const KNOWN_BACKGROUND: readonly string[] = Object.freeze(
+  process.platform === 'linux' ? ['CONNECT redirector.gvt1.com:443 HTTP/1.1'] : []
+)
+
+// Loopback proxy that every app session is pointed at. The interceptor answers http/https
+// itself, so the only traffic that reaches this server is traffic that escaped it. Nothing is
+// forwarded: the request is recorded and refused.
+export class EscapeSink {
+  private readonly server: Server
+  private readonly sockets: Set<Socket>
+  readonly port: number
+  readonly escaped: EscapedRequest[]
+  // Refused Chromium background requests from KNOWN_BACKGROUND, kept for the test report
+  readonly background: EscapedRequest[]
+
+  private constructor(server: Server, sockets: Set<Socket>, port: number, escaped: EscapedRequest[], background: EscapedRequest[]) {
+    this.server = server
+    this.sockets = sockets
+    this.port = port
+    this.escaped = escaped
+    this.background = background
+  }
+
+  static async start(): Promise<EscapeSink> {
+    const escaped: EscapedRequest[] = []
+    const background: EscapedRequest[] = []
+    const sockets = new Set<Socket>()
+    const server = createServer((socket) => {
+      sockets.add(socket)
+      socket.on('close', () => sockets.delete(socket))
+      let head = ''
+      socket.on('data', (chunk) => {
+        if (head.includes('\r\n')) return
+        head += chunk.toString('latin1')
+        const end = head.indexOf('\r\n')
+        if (end === -1) return
+        const requestLine = head.slice(0, end)
+        ;(KNOWN_BACKGROUND.includes(requestLine) ? background : escaped).push({ requestLine })
+        socket.end('HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\nconnection: close\r\n\r\n')
+      })
+      socket.on('error', () => {})
+    })
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('escape sink has no port')
+    return new EscapeSink(server, sockets, address.port, escaped, background)
+  }
+
+  // Empties and returns what escaped so far (for tests that provoke an escape on purpose)
+  drain(): EscapedRequest[] {
+    return this.escaped.splice(0)
+  }
+
+  close(): Promise<void> {
+    for (const socket of this.sockets) socket.destroy()
+    return new Promise((done) => this.server.close(() => done()))
+  }
+}
+
+export interface LaunchOptions {
+  // Reuse an existing profile (relaunch/persistence tests); by default a fresh temp dir is used
+  userDataDir?: string
+  // Routes the interceptor serves from the first request on; see Route in types.ts
+  routes?: Route[]
+  // Main-process stubs applied before the app's main module runs, on top of the defaults
+  // (shell.openExternal, shell.openPath, dialog.showErrorBox are always recorders)
+  stubs?: StubSpec[]
+  env?: Record<string, string>
+}
+
+export class LaunchedApp {
+  readonly electronApp: ElectronApplication
+  readonly userDataDir: string
+  // Snapshot of main-process state taken at close(), so it stays readable afterwards
+  private final: { requests: InterceptedRequest[]; windowFocusEvents: number } | null = null
+
+  constructor(electronApp: ElectronApplication, userDataDir: string) {
+    this.electronApp = electronApp
+    this.userDataDir = userDataDir
+  }
+
+  // Every http/https request the interceptor has served, in order
+  async requests(): Promise<InterceptedRequest[]> {
+    if (this.final) return this.final.requests
+    return this.electronApp.evaluate(() => globalThis.__jiraDesktopE2E!.requests)
+  }
+
+  // How often any window gained focus (the launchApp fixture requires 0 unless headed)
+  async windowFocusEvents(): Promise<number> {
+    if (this.final) return this.final.windowFocusEvents
+    return this.electronApp.evaluate(() => globalThis.__jiraDesktopE2E!.windowFocusEvents)
+  }
+
+  // Replaces the route table for subsequent requests
+  async setRoutes(routes: Route[]): Promise<void> {
+    await this.electronApp.evaluate((_, next) => {
+      globalThis.__jiraDesktopE2E!.routes = next
+    }, routes)
+  }
+
+  // Stubs a main-process function after launch (see StubSpec); use LaunchOptions.stubs for
+  // anything the app may call during startup
+  async stubMain(spec: StubSpec): Promise<void> {
+    await this.electronApp.evaluate((_, next) => globalThis.__jiraDesktopE2E!.stub(next), spec)
+  }
+
+  // Arguments of every call to a stubbed function (defaults included)
+  async stubCalls(moduleName: string, method: string): Promise<unknown[][]> {
+    const key = `${moduleName}.${method}`
+    return this.electronApp.evaluate((_, k) => globalThis.__jiraDesktopE2E!.calls[k] ?? [], key)
+  }
+
+  // Quits the app, keeping the request log readable afterwards. Safe to call twice.
+  async close(): Promise<void> {
+    if (this.final) return
+    this.final = await this.electronApp
+      .evaluate(() => ({ requests: globalThis.__jiraDesktopE2E!.requests, windowFocusEvents: globalThis.__jiraDesktopE2E!.windowFocusEvents }))
+      .catch(() => ({ requests: [], windowFocusEvents: 0 }))
+    await this.electronApp.close()
+  }
+}
+
+async function launch(sink: EscapeSink, userDataDir: string, opts: LaunchOptions): Promise<LaunchedApp> {
+  const electronApp = await _electron.launch({
+    // `-r` runs the interceptor in the main process before the app's main module loads
+    args: ['-r', interceptModule, repoRoot],
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      ...opts.env,
+      JIRA_DESKTOP_E2E: '1',
+      JIRA_DESKTOP_USER_DATA_DIR: userDataDir,
+      JIRA_DESKTOP_E2E_SINK_PORT: String(sink.port),
+      JIRA_DESKTOP_E2E_ROUTES: JSON.stringify(opts.routes ?? []),
+      JIRA_DESKTOP_E2E_STUBS: JSON.stringify(opts.stubs ?? [])
+    }
+  })
+  return new LaunchedApp(electronApp, userDataDir)
+}
+
+interface Fixtures {
+  escapeSink: EscapeSink
+  launchApp: (opts?: LaunchOptions) => Promise<LaunchedApp>
+}
+
+export const test = base.extend<Fixtures>({
+  // One sink per test, shared by every launch in it. Teardown fails the test if anything escaped.
+  escapeSink: async ({}, use, testInfo) => {
+    const sink = await EscapeSink.start()
+    await use(sink)
+    await sink.close()
+    await testInfo.attach('escaped-requests.json', { body: JSON.stringify(sink.escaped, null, 2), contentType: 'application/json' })
+    if (sink.background.length) {
+      await testInfo.attach('refused-background-requests.json', { body: JSON.stringify(sink.background, null, 2), contentType: 'application/json' })
+    }
+    expect(sink.escaped, 'requests escaped the e2e interceptor').toEqual([])
+  },
+
+  launchApp: async ({ escapeSink }, use, testInfo) => {
+    const launched: LaunchedApp[] = []
+    const ownedDirs = new Set<string>()
+    await use(async (opts = {}) => {
+      let userDataDir = opts.userDataDir
+      if (!userDataDir) {
+        userDataDir = await mkdtemp(join(tmpdir(), 'jira-desktop-e2e-'))
+        ownedDirs.add(userDataDir)
+      }
+      const app = await launch(escapeSink, userDataDir, opts)
+      launched.push(app)
+      return app
+    })
+    const log: InterceptedRequest[][] = []
+    const focusEvents: number[] = []
+    for (const app of launched) {
+      await app.close()
+      log.push(await app.requests())
+      focusEvents.push(await app.windowFocusEvents())
+    }
+    await testInfo.attach('intercepted-requests.json', { body: JSON.stringify(log, null, 2), contentType: 'application/json' })
+    await testInfo.attach('window-focus-events.json', { body: JSON.stringify(focusEvents), contentType: 'application/json' })
+    for (const dir of ownedDirs) await rm(dir, { recursive: true, force: true })
+    if (process.env.JIRA_DESKTOP_E2E_HEADED !== '1') {
+      expect(focusEvents.every((count) => count === 0), `a window took focus (per launch: ${focusEvents})`).toBe(true)
+    }
+  }
+})

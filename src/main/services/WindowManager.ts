@@ -1,4 +1,4 @@
-import { BrowserWindow, Menu, MenuItem, nativeImage } from 'electron'
+import { BrowserWindow } from 'electron'
 import { join } from 'path'
 import { StorageService } from './StorageService'
 
