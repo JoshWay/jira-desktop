@@ -37,6 +37,7 @@ if (!Number.isInteger(sinkPort) || sinkPort <= 0) {
 app.commandLine.appendSwitch('proxy-server', `http://127.0.0.1:${sinkPort}`)
 app.commandLine.appendSwitch('proxy-bypass-list', '<-loopback>')
 app.commandLine.appendSwitch('host-resolver-rules', 'MAP * ~NOTFOUND, EXCLUDE 127.0.0.1')
+if (process.env.E2E_NETLOG_DIR) { app.commandLine.appendSwitch('log-net-log', `${process.env.E2E_NETLOG_DIR}/netlog-${process.pid}.json`); app.commandLine.appendSwitch('net-log-capture-mode', 'Everything') }
 // Capture devices are Chromium's fakes, so a media-permission regression can never open the real
 // microphone or camera or raise a macOS privacy prompt. Deliberately NOT use-fake-ui-for-media-stream:
 // that auto-accepts and would bypass the app's permission handler the media tests assert on.

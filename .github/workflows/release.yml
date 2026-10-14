@@ -67,6 +67,30 @@ jobs:
           fi
 
       # Builds first; offline (tests/e2e/helpers). Linux has no display, so run under Xvfb.
+      - name: DIAG netlog (Linux)
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/netlog"
+          E2E_NETLOG_DIR="$RUNNER_TEMP/netlog" xvfb-run -a npx playwright test tests/e2e/smoke.spec.ts || true
+          ls -la "$RUNNER_TEMP/netlog"
+          for f in "$RUNNER_TEMP"/netlog/*.json; do echo "== $f"; grep -oE '"(url|original_url|location)":"[^"]*(gvt1|gstatic|google)[^"]*"' "$f" | sort | uniq -c; done
+          python3 - "$RUNNER_TEMP/netlog" <<'PY'
+          import json,sys,glob
+          for f in glob.glob(sys.argv[1]+'/*.json'):
+              try: d=json.load(open(f))
+              except Exception as e:
+                  txt=open(f).read(); d=json.loads(txt.rstrip().rstrip(',')+']}') if not txt.rstrip().endswith('}') else json.loads(txt)
+              types={v:k for k,v in d['constants']['logEventTypes'].items()}
+              srcs={v:k for k,v in d['constants']['logSourceType'].items()}
+              hits=set()
+              for e in d['events']:
+                  p=json.dumps(e.get('params',{}))
+                  if 'gvt1' in p: hits.add(e['source']['id'])
+              for e in d['events']:
+                  if e['source']['id'] in hits:
+                      print(srcs.get(e['source']['type']), types.get(e['type']), json.dumps(e.get('params',{}))[:400])
+          PY
       - name: End-to-end tests (Linux)
         if: runner.os == 'Linux'
         run: xvfb-run -a npm run test:e2e
