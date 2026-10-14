@@ -9,12 +9,15 @@ import { localPageUrl } from './security/localPageUrl'
 import { DialogController } from './dialogs/DialogController'
 import { createSettingsStore } from './services/settings'
 import type { SettingsStore, ThemeSource } from './services/settings'
-import { describeLoadFailure, resolveSavedSiteUrl, shouldShowLoadError } from './services/mainWindowRules'
+import { STRANDED_LOAD_DESCRIPTION, describeLoadFailure, isStranded, resolveSavedSiteUrl, shouldShowLoadError } from './services/mainWindowRules'
 import type { LoadFailure } from './services/mainWindowRules'
 import { mainWindowPlacement } from './services/windowBounds'
 
 const DEFAULT_WINDOW_SIZE = Object.freeze({ width: 1200, height: 900 })
 const MIN_WINDOW_SIZE = Object.freeze({ width: 800, height: 600 })
+// The main window is created hidden and normally shown on its first paint; if no load event shows
+// it by then, it is shown anyway, so the app is never running with no window
+const MAIN_WINDOW_SHOW_FALLBACK_MS = 5_000
 
 const THEME_CHOICES: readonly { label: string; value: ThemeSource }[] = Object.freeze([
   { label: 'System', value: 'system' },
@@ -165,12 +168,27 @@ class JiraApp {
     })
     this.mainWindow = win
 
-    win.once('ready-to-show', () => {
-      if (placement.maximize) win.maximize()
-      win.show()
-    })
+    // Shown once: on its first paint, or when loading first stops or a main-frame load fails before
+    // one (a load the policy cancelled paints nothing, so ready-to-show never comes), or after a
+    // bounded wait. Never again after that, so a window the user hid stays hidden.
+    // codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
+    let revealed = false
+    const reveal = (): void => {
+      if (revealed || win.isDestroyed()) return
+      revealed = true
+      clearTimeout(revealFallback)
+      win.webContents.off('did-stop-loading', reveal)
+      if (!win.isVisible()) {
+        if (placement.maximize) win.maximize()
+        win.show()
+      }
+    }
+    const revealFallback = setTimeout(reveal, MAIN_WINDOW_SHOW_FALLBACK_MS)
+    win.once('ready-to-show', reveal)
+    win.webContents.on('did-stop-loading', reveal)
 
     win.on('closed', () => {
+      clearTimeout(revealFallback)
       if (this.mainWindow === win) this.mainWindow = null
     })
 
@@ -186,10 +204,12 @@ class JiraApp {
     win.on('unmaximize', saveState)
     win.on('close', saveState)
 
-    // A failed main-frame load (not an aborted one) shows the error view
+    // A failed main-frame load (not an aborted one) shows the error view (see loadSite for an
+    // aborted one that leaves nothing to show)
     // codex:run npm test -- tests/unit/mainWindowRules.test.ts
     // codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
     win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      if (isMainFrame) reveal()
       if (!shouldShowLoadError(errorCode, isMainFrame, validatedURL, isLocalPageUrl)) return
       // Not from inside the event: Chromium is still committing its own error page
       setImmediate(() => this.showLoadError(win, describeLoadFailure(validatedURL, errorDescription, this.siteUrl())))
@@ -212,6 +232,13 @@ class JiraApp {
       })
   }
 
+  private showErrorIfStranded(win: BrowserWindow, url: string): void {
+    if (win.isDestroyed() || this.mainWindow !== win) return
+    const contents = win.webContents
+    if (!isStranded(contents.getURL(), contents.isLoading(), isLocalPageUrl)) return
+    this.showLoadError(win, describeLoadFailure(url, STRANDED_LOAD_DESCRIPTION, this.siteUrl()))
+  }
+
   private showLoadError(win: BrowserWindow, failure: LoadFailure): void {
     if (win.isDestroyed() || this.mainWindow !== win) return
     this.showPlaceholder(win, () => this.dialogs.showLoadError(failure))
@@ -221,12 +248,22 @@ class JiraApp {
   // retryUrl) in the main window. While it shows the placeholder, a local page, the policy treats
   // it as confined and would hand the site's own redirects to the browser; so it leaves the
   // placeholder for about:blank first.
+  // A site load that ends with nothing to show for it shows the error view, not a blank (at startup,
+  // never shown) window. The policy cancelling the site's redirect (sent to the browser, or refused)
+  // does that: no did-fail-load fires and nothing commits; loadURL only rejects.
+  // codex:run npm test -- tests/unit/mainWindowRules.test.ts
   // codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
   private loadSite(url: string): void {
     const win = this.mainWindow
     if (!win || win.isDestroyed()) return
     const load = (): void => {
-      if (!win.isDestroyed()) win.loadURL(url).catch(logLoadFailure)
+      if (win.isDestroyed()) return
+      win.loadURL(url).catch((error: unknown) => {
+        logLoadFailure(error)
+        // Checked once the rejection has settled: a newer load that superseded this one, or the
+        // error view a real failure opened (did-fail-load), is under way by then
+        setImmediate(() => this.showErrorIfStranded(win, url))
+      })
     }
     if (isLocalPageUrl(win.webContents.getURL())) win.loadURL('about:blank').then(load, load)
     else load()

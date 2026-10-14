@@ -188,6 +188,43 @@ test('a failed in-app navigation offers Change URL; aborted loads show no error 
   expect((await savedSettings(app.userDataDir)).jiraUrl).toBe('https://team.atlassian.net/jira')
 })
 
+// The policy hands a site's first redirect to the browser when it goes somewhere the app does not
+// open (a self-hosted SSO host outside the known sign-in hosts, or http upgrading to https). That
+// load is aborted with nothing painted, so ready-to-show never comes: the window must still be
+// shown, with the load-error view rather than a blank page.
+// codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
+test('a saved site whose first redirect goes to the browser still shows the window and the error view', async ({ launchApp }) => {
+  const cases = [
+    { site: 'https://jira.corp.test/', target: 'https://sso.corp-idp.test/adfs/ls/?wa=wsignin1.0' },
+    { site: 'http://jira.corp.test/', target: 'https://jira.corp.test/' }
+  ]
+  for (const { site, target } of cases) {
+    const app = await launchApp({
+      settings: { jiraUrl: site },
+      routes: [{ url: site, response: { status: 302, headers: { location: target }, body: '' } }]
+    })
+    const page = await mainPage(app)
+    await expect.poll(() => app.stubCalls('shell', 'openExternal')).toEqual([[target]])
+
+    const dialog = await waitForDialog(app)
+    await expect(page).toHaveURL(PLACEHOLDER_PAGE)
+    const mainWindow = await app.electronApp.browserWindow(page)
+    await expect.poll(() => mainWindow.evaluate((win) => win.isVisible())).toBe(true)
+    await expect(dialog.locator('#heading')).toHaveText('Couldn’t load Jira')
+    await expect(dialog.locator('#message')).toContainText('does not open in Jira Desktop')
+    await expect(dialog.locator('#submit')).toHaveText('Retry')
+    expect(await windowCount(app)).toBe(2)
+
+    // Retry loads the configured site again (now serving a page)
+    await app.setRoutes([])
+    await closeVia(dialog, () => dialog.locator('#submit').click())
+    await expect(page).toHaveURL(site)
+    await expect(page).toHaveTitle('E2E stub')
+    await expect.poll(() => windowCount(app)).toBe(1)
+    await app.close()
+  }
+})
+
 test('the Appearance radio sets the theme and persists across a relaunch', async ({ launchApp }) => {
   const app = await launchApp()
   await mainPage(app)

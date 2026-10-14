@@ -52,6 +52,22 @@ export function shouldShowLoadError(errorCode: number, isMainFrame: boolean, url
   return isRemotePage(url) && !isLocalPage(url)
 }
 
+// Shown in the load-error view when the main window's load was cancelled with nothing to show:
+// the policy sent a redirect (typically an SSO sign-in host it does not know) to the browser, or
+// refused it. Not a connection problem, so it says what happened instead of ERR_ABORTED.
+export const STRANDED_LOAD_DESCRIPTION = 'it redirected to a page that does not open in Jira Desktop; a sign-in page may have opened in your browser'
+
+// After a site load was aborted: true when the main window is left with nothing remote committed
+// (its URL is '', about:blank or one of the app's local pages) and no other load under way. The
+// policy cancels a redirect it hands to the browser this way, and without the load-error view the
+// window would stay blank (or, at startup, hidden: nothing ever paints). A load superseded by a
+// newer one is not stranded (that one is still loading), nor is one from a page already showing.
+// codex:run npm test -- tests/unit/mainWindowRules.test.ts
+export function isStranded(committedUrl: string, isLoading: boolean, isLocalPage: (url: string) => boolean): boolean {
+  if (isLoading) return false
+  return committedUrl === '' || committedUrl === 'about:blank' || isLocalPage(committedUrl)
+}
+
 function cap(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`
 }

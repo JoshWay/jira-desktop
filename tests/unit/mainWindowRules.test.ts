@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MAX_FAILED_URL_LENGTH, describeLoadFailure, resolveSavedSiteUrl, shouldShowLoadError } from '../../src/main/services/mainWindowRules'
+import { MAX_FAILED_URL_LENGTH, STRANDED_LOAD_DESCRIPTION, describeLoadFailure, isStranded, resolveSavedSiteUrl, shouldShowLoadError } from '../../src/main/services/mainWindowRules'
 
 const DIALOG_PAGE = 'file:///app/dist/renderer/dialog.html'
 const isLocalPage = (url: string): boolean => url.startsWith('file:///app/dist/renderer/') || url.startsWith('http://localhost:5173/')
@@ -59,6 +59,27 @@ describe('shouldShowLoadError', () => {
     for (const url of [DIALOG_PAGE, 'file:///app/dist/renderer/placeholder.html', 'http://localhost:5173/placeholder.html', 'about:blank', 'chrome-error://chromewebdata/', '', 'not a url']) {
       expect(shouldShowLoadError(-2, true, url, isLocalPage), url).toBe(false)
     }
+  })
+})
+
+// codex:run npm test -- tests/unit/mainWindowRules.test.ts
+describe('isStranded', () => {
+  it('reports a main window left with nothing remote committed and nothing loading', () => {
+    // Startup (nothing committed yet), after leaving the placeholder, and on a local page
+    for (const committed of ['', 'about:blank', 'file:///app/dist/renderer/placeholder.html', 'http://localhost:5173/placeholder.html']) {
+      expect(isStranded(committed, false, isLocalPage), committed).toBe(true)
+    }
+  })
+
+  it('ignores a load superseded by one still running, and a page that is already showing', () => {
+    expect(isStranded('', true, isLocalPage)).toBe(false)
+    expect(isStranded('about:blank', true, isLocalPage)).toBe(false)
+    expect(isStranded('https://acme.atlassian.net/jira', false, isLocalPage)).toBe(false)
+    expect(isStranded('https://evil.test/', false, isLocalPage)).toBe(false)
+  })
+
+  it('has a description that fits the error view uncut', () => {
+    expect(describeLoadFailure('https://jira.corp.test/', STRANDED_LOAD_DESCRIPTION, 'https://jira.corp.test/').errorDescription).toBe(STRANDED_LOAD_DESCRIPTION)
   })
 })
 
