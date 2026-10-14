@@ -5,7 +5,7 @@
 // codex:run npm run test:e2e -- tests/e2e/security.spec.ts
 import { app, session, shell } from 'electron'
 import type { Event, Session, WebContents, WebPreferences } from 'electron'
-import { LocalPageRegistry, decideNavigation, decideWindowOpen, hasPrivilegedPrefs, isExpectedLoadAbort, isPermissionAllowed, toExternalHref } from './navigationPolicy'
+import { LocalPageRegistry, decideNavigation, decideWindowOpen, isConfinedContents, isExpectedLoadAbort, isPermissionAllowed, toExternalHref } from './navigationPolicy'
 import type { PolicyContext } from './navigationPolicy'
 
 // App-owned pages (Task 5 dialogs, the dev server). Empty until something registers.
@@ -34,14 +34,22 @@ const AUTH_POPUP_WEB_PREFERENCES: WebPreferences = Object.freeze({
   webviewTag: false
 })
 
-// Contents that hold any privilege (see hasPrivilegedPrefs), or show a local page, may never load
-// remote content. Unknown prefs fail closed.
-// getLastWebPreferences is undocumented (Electron's own window.open inheritance uses it), hence
-// the shim; if it ever disappears every contents becomes confined and the e2e suite fails loudly.
-// Electron 44 leaves the per-window `preload` out of it, so the preload comes from
-// _getPreloadScript (undocumented too; Electron's sandboxed preload loader uses it), and fails
-// closed the same way. The dialog (dialogs/DialogController.ts) has a preload, so it is confined
-// to local pages by its prefs, not only by the URL it happens to show.
+// Windows the app itself creates with a preload (the dialog now, Task 7's local pages later). This
+// is the primary privilege signal: Electron 44 has no documented per-contents preload getter.
+const privilegedContents = new WeakSet<WebContents>()
+
+// Call right after creating any window that has a preload, before it loads anything. It is then
+// confined to local pages for its whole life, whatever it shows.
+// codex:run npm run test:e2e -- tests/e2e/security.spec.ts
+export function registerPrivilegedContents(contents: WebContents): void {
+  privilegedContents.add(contents)
+}
+
+// Contents that hold any privilege, or show a local page, may never load remote content.
+// Beyond the registry, as defence in depth: getLastWebPreferences is undocumented (Electron's own
+// window.open inheritance uses it) and Electron 44 leaves the per-window `preload` out of it, so
+// the preload comes from _getPreloadScript (undocumented too; Electron's sandboxed preload loader
+// uses it). Missing getters, unknown prefs and getters that throw all mean confined.
 // codex:run npm test -- tests/unit/navigationPolicy.test.ts
 // codex:run npm run test:e2e -- tests/e2e/security.spec.ts
 type WithInternals = WebContents & {
@@ -57,9 +65,15 @@ function preloadOf(contents: WithInternals): string | undefined {
 
 function isConfined(contents: WebContents): boolean {
   const internals = contents as WithInternals
-  const prefs = internals.getLastWebPreferences?.()
-  if (hasPrivilegedPrefs(prefs && { ...prefs, preload: prefs.preload || preloadOf(internals) })) return true
-  return localPages.matches(contents.getURL())
+  return isConfinedContents(
+    {
+      registered: privilegedContents.has(contents),
+      prefs: () => internals.getLastWebPreferences?.(),
+      preload: () => preloadOf(internals),
+      url: () => contents.getURL()
+    },
+    (url) => localPages.matches(url)
+  )
 }
 
 // codex:run npm test -- tests/unit/navigationPolicy.test.ts

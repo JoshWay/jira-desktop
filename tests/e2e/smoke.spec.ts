@@ -15,8 +15,9 @@ test('launches, shows the main window and keeps all traffic local', async ({ lau
   const prefs = await mainWindow.evaluate((win) => {
     const p = win.webContents.getLastWebPreferences()
     // Electron 44 leaves `preload` out of getLastWebPreferences; _getPreloadScript has it
-    const preload = (win.webContents as Electron.WebContents & { _getPreloadScript(): { filePath: string } | null })._getPreloadScript()
-    return { sandbox: p?.sandbox, contextIsolation: p?.contextIsolation, nodeIntegration: p?.nodeIntegration, webSecurity: p?.webSecurity, preload: preload?.filePath ?? null }
+    const contents = win.webContents as Electron.WebContents & { _getPreloadScript?: () => unknown }
+    if (typeof contents._getPreloadScript !== 'function') throw new Error('Electron no longer has webContents._getPreloadScript')
+    return { sandbox: p?.sandbox, contextIsolation: p?.contextIsolation, nodeIntegration: p?.nodeIntegration, webSecurity: p?.webSecurity, preload: contents._getPreloadScript() }
   })
   expect(prefs).toEqual({ sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, preload: null })
 

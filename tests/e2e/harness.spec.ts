@@ -155,13 +155,19 @@ test('keeps windows off the user\'s screen and out of focus', async ({ launchApp
   })
   expect(state).toEqual({ focused: false, focusedWindow: false, opacity: 0, x: expect.any(Number), dockVisible: false })
   expect(state.x).toBeLessThan(0)
-  // Rendering is not throttled: timers in the page keep firing at full rate
+  // Rendering is not background-throttled. Chromium's throttling caps a hidden page's timers at
+  // about 1Hz (one wake-up per second, far less once intensive), so a 10ms interval gets at most
+  // ~3 ticks in 2s; unthrottled it gets ~200. The bar sits at 5x the throttle cap rather than near
+  // full rate, so CPU contention (seen at ~7 ticks per 500ms under a fullscreen game) cannot fail
+  // it while throttling still does. Note: Playwright's Electron loader already passes
+  // --disable-background-timer-throttling, so this guards the harness against regressions that
+  // stop timers some other way (e.g. a frozen or never-shown page) as much as against throttling.
   const ticks = await page.evaluate(() => new Promise<number>((done) => {
     let count = 0
     const id = setInterval(() => count++, 10)
-    setTimeout(() => { clearInterval(id); done(count) }, 500)
+    setTimeout(() => { clearInterval(id); done(count) }, 2000)
   }))
-  expect(ticks).toBeGreaterThan(30)
+  expect(ticks).toBeGreaterThanOrEqual(10)
   expect(await app.windowFocusEvents()).toBe(0)
 })
 

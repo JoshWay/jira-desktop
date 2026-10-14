@@ -42,6 +42,30 @@ export function hasPrivilegedPrefs(prefs: PrivilegePrefs | null | undefined): bo
   return prefs.sandbox === false || prefs.contextIsolation === false
 }
 
+// What isConfinedContents needs to know about one webContents. The getters may throw (they read
+// Electron internals), and `preload` returns undefined when the contents has none.
+export interface ConfinementProbe {
+  // Registered by the app as privileged (it created the window with a preload)
+  registered: boolean
+  prefs: () => PrivilegePrefs | null | undefined
+  preload: () => string | undefined
+  url: () => string
+}
+
+// Confined: registered as privileged, privileged by its prefs or preload, or showing a local page.
+// Any getter that throws makes the contents confined (fail closed), never an exception.
+// codex:run npm test -- tests/unit/navigationPolicy.test.ts
+export function isConfinedContents(probe: ConfinementProbe, isLocalPage: (url: string) => boolean): boolean {
+  if (probe.registered) return true
+  try {
+    const prefs = probe.prefs()
+    if (hasPrivilegedPrefs(prefs && { ...prefs, preload: prefs.preload || probe.preload() })) return true
+    return isLocalPage(probe.url())
+  } catch {
+    return true
+  }
+}
+
 // A loadURL rejection with ERR_ABORTED means the load was cancelled (superseded or stopped), which
 // is expected; any other rejection is a real failure. (On Electron 44 a redirect the policy
 // prevents resolves loadURL rather than rejecting.)

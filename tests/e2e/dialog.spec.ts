@@ -1,13 +1,20 @@
 // The local dialog (Set Jira URL / New Atlassian Window), spec R2: a sandboxed local page with a
 // minimal preload, inert rendering of whatever it shows, inline validation, and IPC that answers
 // only the open dialog's own page. Offline through the harness; dialog.showErrorBox is a recorder.
-import type { Page } from '@playwright/test'
 import { expect, test } from './helpers/app'
 import type { LaunchedApp } from './helpers/app'
-import { DIALOG_CHANNELS, DIALOG_PAGE, clickAppMenu, openDialog } from './helpers/dialog'
+import { DIALOG_CHANNELS, DIALOG_PAGE, clickAppMenu, closeVia, openDialog } from './helpers/dialog'
 
 const START_URL = 'https://id.atlassian.com/login'
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+
+// loadURL adds transient listeners to the main contents until the load settles (toHaveURL passes at
+// commit), so listener snapshots wait for that first
+async function mainSettled(app: LaunchedApp): Promise<void> {
+  await expect.poll(() => app.electronApp.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().find((w) => !w.webContents.getURL().startsWith('file:'))!.webContents.isLoading()
+  )).toBe(false)
+}
 
 async function windowCount(app: LaunchedApp): Promise<number> {
   return app.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)
@@ -28,17 +35,6 @@ async function listenerCounts(app: LaunchedApp) {
       windows: BrowserWindow.getAllWindows().length
     }
   })
-}
-
-// A key press in the URL field that closes the dialog: keydown only, since the page is gone
-// before a keyup could be delivered
-async function pressClosing(dialog: Page, key: 'Enter' | 'Escape'): Promise<void> {
-  await dialog.locator('#url').focus()
-  await dialog.keyboard.down(key)
-}
-
-async function closed(page: Page): Promise<void> {
-  if (!page.isClosed()) await page.waitForEvent('close')
 }
 
 test('the dialog is a sandboxed, isolated modal local page whose only bridge is dialogAPI', async ({ launchApp }) => {
@@ -75,8 +71,9 @@ test('the dialog is a sandboxed, isolated modal local page whose only bridge is 
     const main = all.find((w) => w !== win)!
     const contents = win.webContents as Electron.WebContents & {
       getLastWebPreferences(): Electron.WebPreferences
-      _getPreloadScript(): { filePath: string } | null
+      _getPreloadScript?: () => unknown
     }
+    if (typeof contents._getPreloadScript !== 'function') throw new Error('Electron no longer has webContents._getPreloadScript')
     const p = contents.getLastWebPreferences()
     return {
       sandbox: p.sandbox,
@@ -87,7 +84,7 @@ test('the dialog is a sandboxed, isolated modal local page whose only bridge is 
       webviewTag: p.webviewTag,
       webSecurity: p.webSecurity,
       // Electron 44 leaves `preload` out of getLastWebPreferences; _getPreloadScript has it
-      preload: contents._getPreloadScript()?.filePath ?? null,
+      preload: contents._getPreloadScript(),
       modal: win.isModal(),
       parentIsMain: win.getParentWindow() === main,
       resizable: win.isResizable(),
@@ -102,7 +99,7 @@ test('the dialog is a sandboxed, isolated modal local page whose only bridge is 
     nodeIntegrationInWorker: false,
     webviewTag: false,
     webSecurity: true,
-    preload: expect.stringMatching(/[/\\]dist[/\\]preload[/\\]dialog\.js$/),
+    preload: expect.objectContaining({ filePath: expect.stringMatching(/[/\\]dist[/\\]preload[/\\]dialog\.js$/) }),
     modal: true,
     parentIsMain: true,
     resizable: false,
@@ -156,8 +153,7 @@ test('a hostile current URL renders inertly as the input value', async ({ launch
   }))).toEqual({ value: hostile, images: 0, pwned: null, markup: false })
 
   // Submitting it stores (and loads) only the normalized, percent-encoded form
-  await dialog.locator('#submit').click()
-  await closed(dialog)
+  await closeVia(dialog, () => dialog.locator('#submit').click())
   await expect(page).toHaveURL('https://x.atlassian.net/%22%3E%3Cimg%20src=x%20onerror=%22window.__pwned=1%22%3E')
   expect(await app.stubCalls('dialog', 'showErrorBox')).toEqual([])
 })
@@ -166,25 +162,25 @@ test('cancel, reopen and submit three times: no error dialogs and no leaked list
   const app = await launchApp()
   const page = await app.electronApp.firstWindow()
   await expect(page).toHaveURL(START_URL)
+  await mainSettled(app)
   const before = await listenerCounts(app)
   expect(before.invokeHandlers).toBeGreaterThanOrEqual(DIALOG_CHANNELS.length)
 
   for (let round = 1; round <= 3; round++) {
     const cancelled = await openDialog(app, 'Set Jira URL...')
     // Alternate the button and the Escape key
-    if (round % 2) await cancelled.locator('#cancel').click()
-    else await pressClosing(cancelled, 'Escape')
-    await closed(cancelled)
+    if (round % 2) await closeVia(cancelled, () => cancelled.locator('#cancel').click())
+    else await closeVia(cancelled, () => cancelled.locator('#url').press('Escape'))
 
     const dialog = await openDialog(app, 'Set Jira URL...')
     await dialog.locator('#url').fill(`team${round}.atlassian.net`)
-    await pressClosing(dialog, 'Enter')
-    await closed(dialog)
+    await closeVia(dialog, () => dialog.locator('#url').press('Enter'))
     await expect(page).toHaveURL(`https://team${round}.atlassian.net/jira`)
   }
 
   await expect.poll(() => windowCount(app)).toBe(1)
-  expect(await listenerCounts(app)).toEqual(before)
+  await mainSettled(app)
+  await expect.poll(() => listenerCounts(app)).toEqual(before)
   expect(await app.stubCalls('dialog', 'showErrorBox')).toEqual([])
 
   // The last URL set is what the next dialog shows
@@ -225,8 +221,7 @@ test('an invalid URL shows an inline error and the dialog stays open', async ({ 
   expect(await dialog.evaluate(() => (window as unknown as { dialogAPI: { submit(p: unknown): Promise<unknown> } }).dialogAPI
     .submit({ url: 42 }).then(() => 'resolved', () => 'rejected'))).toBe('rejected')
   expect(dialog.isClosed()).toBe(false)
-  await pressClosing(dialog, 'Escape')
-  await closed(dialog)
+  await closeVia(dialog, () => dialog.locator('#url').press('Escape'))
 
   // New-window mode: only in-app addresses
   const newWindow = await openDialog(app, 'New Atlassian Window...')
@@ -318,9 +313,60 @@ test('rejects IPC from any sender but the open dialog\'s own page', async ({ lau
   expect(page.url()).toBe(START_URL)
   expect(dialog.isClosed()).toBe(false)
   await expect(dialog.locator('#url')).toHaveValue(START_URL)
-  await dialog.locator('#cancel').click()
-  await closed(dialog)
+  await closeVia(dialog, () => dialog.locator('#cancel').click())
 
   // Closed again: nothing answers
   expect(await callHandlers(app, [{ channel: 'dialog:get-init', sender: 'main', frame: 'main' }])).toEqual([rejected('dialog:get-init')])
+})
+
+test('a menu click while the previous dialog is closing opens a new one instead of being swallowed', async ({ launchApp }) => {
+  const app = await launchApp()
+  const page = await app.electronApp.firstWindow()
+  await expect(page).toHaveURL(START_URL)
+  const first = await openDialog(app, 'Set Jira URL...')
+
+  // Cancel (accepted from the dialog's own frame) settles it; it closes on the next turn, and the
+  // menu click lands in that gap
+  const reopened = app.electronApp.waitForEvent('window', { timeout: 10_000 })
+  const windowsInGap = await app.electronApp.evaluate(async ({ BrowserWindow, ipcMain, Menu }) => {
+    type Handler = (event: unknown, ...args: unknown[]) => unknown
+    const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, Handler> })._invokeHandlers
+    const win = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().startsWith('file:'))!
+    await handlers.get('dialog:cancel')!({ sender: win.webContents, senderFrame: win.webContents.mainFrame })
+    const item = Menu.getApplicationMenu()!.items[0].submenu!.items.find((i) => i.label === 'Set Jira URL...')!
+    ;(item.click as () => void)()
+    return BrowserWindow.getAllWindows().length
+  })
+  expect(windowsInGap).toBe(3)
+  const second = await reopened
+  if (!first.isClosed()) await first.waitForEvent('close')
+  await expect(second).toHaveURL(DIALOG_PAGE)
+  await expect(second.locator('#submit')).toBeEnabled()
+  await expect.poll(() => windowCount(app)).toBe(2)
+  // The new one is the current dialog: it answers and closes normally
+  await closeVia(second, () => second.locator('#cancel').click())
+  await expect.poll(() => windowCount(app)).toBe(1)
+})
+
+test('a dialog page that fails to load is closed, and the next open works', async ({ launchApp }) => {
+  const app = await launchApp()
+  const page = await app.electronApp.firstWindow()
+  await expect(page).toHaveURL(START_URL)
+
+  // Every file: load fails while this handler is installed
+  await app.electronApp.evaluate(({ session }) => {
+    session.defaultSession.protocol.handle('file', () => Response.error())
+  })
+  const failed = app.electronApp.waitForEvent('window')
+  await clickAppMenu(app, 'Set Jira URL...')
+  await failed
+  await expect.poll(() => windowCount(app)).toBe(1)
+  await app.electronApp.evaluate(({ session }) => {
+    session.defaultSession.protocol.unhandle('file')
+  })
+
+  // Not left behind as a hidden current dialog: the menu opens a fresh, working one
+  const dialog = await openDialog(app, 'Set Jira URL...')
+  await expect(dialog.locator('#url')).toHaveValue(START_URL)
+  expect(await app.stubCalls('dialog', 'showErrorBox')).toEqual([])
 })

@@ -2,9 +2,10 @@
 // permissions and <webview>. Everything runs offline through the harness interceptor;
 // shell.openExternal is the harness recorder, so nothing ever reaches the OS.
 import type { ElectronApplication, Page } from '@playwright/test'
+import { resolve } from 'node:path'
 import { expect, test } from './helpers/app'
 import type { LaunchedApp } from './helpers/app'
-import { DIALOG_PAGE, openDialog } from './helpers/dialog'
+import { DIALOG_PAGE, closeVia, openDialog } from './helpers/dialog'
 
 interface NavigationRecord {
   event: 'will-navigate' | 'will-redirect'
@@ -54,15 +55,16 @@ async function prefsOf(electronApp: ElectronApplication, url: string) {
     // Electron 44 leaves `preload` out of getLastWebPreferences; _getPreloadScript has it
     const contents = win.webContents as Electron.WebContents & {
       getLastWebPreferences(): Electron.WebPreferences
-      _getPreloadScript(): { filePath: string } | null
+      _getPreloadScript?: () => unknown
     }
+    if (typeof contents._getPreloadScript !== 'function') throw new Error('Electron no longer has webContents._getPreloadScript')
     const p = contents.getLastWebPreferences()
     return {
       sandbox: p.sandbox,
       contextIsolation: p.contextIsolation,
       nodeIntegration: p.nodeIntegration,
       webSecurity: p.webSecurity,
-      preload: contents._getPreloadScript()?.filePath ?? null,
+      preload: contents._getPreloadScript(),
       isDefaultSession: contents.session === session.defaultSession
     }
   }, url)
@@ -114,7 +116,7 @@ test('a WindowManager window shares the default session and is equally locked do
   const windowOpened = app.electronApp.waitForEvent('window', { predicate: (p) => p.url() === target })
   await dialog.locator('#url').fill(target)
   await dialog.locator('#background').check()
-  await dialog.locator('#submit').click()
+  await closeVia(dialog, () => dialog.locator('#submit').click())
   const extra = await windowOpened
 
   expect(await prefsOf(app.electronApp, target)).toMatchObject({ ...SECURE_PREFS, isDefaultSession: true })
@@ -320,7 +322,7 @@ test('the Set URL dialog is confined to local pages, and the site it sets become
   await expect(dialog.locator('#url')).toHaveValue(START_URL)
 
   await dialog.locator('#url').fill('https://jira.corp.test/')
-  await dialog.locator('#submit').click()
+  await closeVia(dialog, () => dialog.locator('#submit').click())
   await expect(page).toHaveURL('https://jira.corp.test/')
 
   // The configured self-hosted site is in-app: navigation stays in the window and permissions apply
@@ -330,25 +332,85 @@ test('the Set URL dialog is confined to local pages, and the site it sets become
   expect(await app.stubCalls('shell', 'openExternal')).toEqual([['https://team.atlassian.net/']])
 })
 
+// A do-nothing preload, so these tests never hand the app's real dialog bridge to remote content
+const NOOP_PRELOAD = resolve(__dirname, 'fixtures/noop-preload.js')
+
 test('a contents with a preload is confined even when it is not showing a local page', async ({ launchApp }) => {
   const app = await launchApp()
   const page = await app.electronApp.firstWindow()
   await expect(page).toHaveURL(START_URL)
   await watchNavigations(app)
 
-  // Main may load what it likes; the policy governs what the page does next
+  // Main may load what it likes; the policy governs what the page does next. Not registered as
+  // privileged: only the preload itself (seen through _getPreloadScript) confines it.
   const preloaded = app.electronApp.waitForEvent('window', { predicate: (p) => p.url() === 'https://team.atlassian.net/start' })
-  await app.electronApp.evaluate(({ BrowserWindow }) => {
-    const win = new BrowserWindow({
-      show: false,
-      webPreferences: { preload: `${process.cwd()}/dist/preload/dialog.js`, sandbox: true, contextIsolation: true }
-    })
+  await app.electronApp.evaluate(({ BrowserWindow }, preload) => {
+    const win = new BrowserWindow({ show: false, webPreferences: { preload, sandbox: true, contextIsolation: true } })
     void win.loadURL('https://team.atlassian.net/start')
-  })
+  }, NOOP_PRELOAD)
   const other = await preloaded
   expect(await navigate(app, other, 'https://team.atlassian.net/next')).toMatchObject({ prevented: true })
   await expect.poll(() => app.stubCalls('shell', 'openExternal')).toEqual([['https://team.atlassian.net/next']])
   expect(other.url()).toBe('https://team.atlassian.net/start')
   // The same kind of navigation from the main window (no preload) stays in-app
   expect(await navigate(app, page, 'https://team.atlassian.net/main-next')).toMatchObject({ prevented: false })
+})
+
+test('the dialog stays confined by the privileged registry even when Electron reports no preload', async ({ launchApp }) => {
+  const app = await launchApp()
+  const page = await app.electronApp.firstWindow()
+  await expect(page).toHaveURL(START_URL)
+  const dialog = await openDialog(app, 'Set Jira URL...')
+  await watchNavigations(app)
+
+  // Main loads remote content into the dialog and its internals are made to look unprivileged, so
+  // neither its URL nor its prefs/preload confine it any more: only the registry does
+  await app.electronApp.evaluate(async ({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().startsWith('file:'))!
+    const contents = win.webContents as unknown as Record<string, unknown>
+    const plain = { sandbox: true, contextIsolation: true, nodeIntegration: false, nodeIntegrationInSubFrames: false, nodeIntegrationInWorker: false, webviewTag: false }
+    contents.getLastWebPreferences = () => plain
+    contents._getPreloadScript = () => null
+    await win.loadURL('https://team.atlassian.net/in-dialog')
+  })
+  await expect(dialog).toHaveURL('https://team.atlassian.net/in-dialog')
+  expect(await navigate(app, dialog, 'https://team.atlassian.net/next')).toMatchObject({ prevented: true })
+  await expect.poll(() => app.stubCalls('shell', 'openExternal')).toEqual([['https://team.atlassian.net/next']])
+  expect(dialog.url()).toBe('https://team.atlassian.net/in-dialog')
+
+  // Its bridge still exists on the remote page, but the sender check refuses it (navigated URL)
+  expect(await dialog.evaluate(() => (window as unknown as { dialogAPI: { getInit(): Promise<unknown> } }).dialogAPI
+    .getInit().then(() => 'answered', () => 'rejected'))).toBe('rejected')
+})
+
+test('a contents whose Electron internals throw is confined, without a main-process exception', async ({ launchApp }) => {
+  const app = await launchApp()
+  const page = await app.electronApp.firstWindow()
+  await expect(page).toHaveURL(START_URL)
+  await watchNavigations(app)
+
+  const breakInternal = (name: '_getPreloadScript' | 'getLastWebPreferences' | null) =>
+    app.electronApp.evaluate(({ BrowserWindow }, method) => {
+      const contents = BrowserWindow.getAllWindows()[0].webContents as unknown as Record<string, unknown>
+      delete contents._getPreloadScript
+      delete contents.getLastWebPreferences
+      if (method) contents[method] = () => { throw new Error('internals changed') }
+    }, name)
+
+  await breakInternal('_getPreloadScript')
+  // Navigation and window.open both treat it as confined: in-app URLs go to the browser
+  expect(await navigate(app, page, 'https://team.atlassian.net/a')).toMatchObject({ prevented: true })
+  expect(await page.evaluate(() => window.open('https://team.atlassian.net/b') === null)).toBe(true)
+  await expect.poll(() => app.stubCalls('shell', 'openExternal')).toEqual([['https://team.atlassian.net/a'], ['https://team.atlassian.net/b']])
+
+  await breakInternal('getLastWebPreferences')
+  expect(await navigate(app, page, 'https://team.atlassian.net/c')).toMatchObject({ prevented: true })
+  await expect.poll(() => app.stubCalls('shell', 'openExternal')).toHaveLength(3)
+  expect(page.url()).toBe(START_URL)
+
+  // Restored: the same contents is unconfined again, so the throws were the only cause
+  await breakInternal(null)
+  expect(await navigate(app, page, 'https://team.atlassian.net/d')).toMatchObject({ prevented: false })
+  // An exception in a policy listener would have reached Electron's default handler (showErrorBox)
+  expect(await app.stubCalls('dialog', 'showErrorBox')).toEqual([])
 })

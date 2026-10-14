@@ -10,7 +10,7 @@ import type { DialogInit, DialogMode, DialogSubmitResult, ProductChoice } from '
 import { handleFromLocalPage } from '../security/localPageIpc'
 import type { LocalPage } from '../security/localPageIpc'
 import { isExpectedLoadAbort } from '../security/navigationPolicy'
-import { registerLocalPage } from '../security/webContentsPolicy'
+import { registerLocalPage, registerPrivilegedContents } from '../security/webContentsPolicy'
 import type { WindowManager } from '../services/WindowManager'
 import { parseSubmitPayload, validateDialogUrl } from './dialogRules'
 
@@ -67,11 +67,12 @@ export class DialogController {
     })
   }
 
-  // Opens the dialog, or focuses the one already open (whatever its mode)
+  // Opens the dialog, or focuses the one already open (whatever its mode). One that is settled is
+  // already closing, so a new one opens instead of the request being swallowed.
   // codex:run npm run test:e2e -- tests/e2e/dialog.spec.ts
   open(mode: DialogMode): void {
     const open = this.current
-    if (open && !open.window.isDestroyed()) {
+    if (open && !open.settled && !open.window.isDestroyed()) {
       open.window.focus()
       return
     }
@@ -102,6 +103,8 @@ export class DialogController {
         spellcheck: false
       }
     })
+    // Confined to local pages for its whole life, whatever Electron's internals report
+    registerPrivilegedContents(window.webContents)
     window.removeMenu()
 
     const dialog: OpenDialog = { window, contents: window.webContents, pageUrl: this.pageUrl, mode, settled: false }
@@ -110,8 +113,13 @@ export class DialogController {
     window.once('closed', () => {
       if (this.current === dialog) this.current = null
     })
+    // A page that failed to load never shows (no ready-to-show); close it so it does not stay
+    // the hidden current dialog that every later open() would only focus
+    // codex:run npm run test:e2e -- tests/e2e/dialog.spec.ts
     window.loadURL(this.pageUrl).catch((error: unknown) => {
-      if (!isExpectedLoadAbort(error)) console.error('dialog failed to load:', error)
+      if (isExpectedLoadAbort(error)) return
+      console.error('dialog failed to load:', error)
+      if (!window.isDestroyed()) window.close()
     })
   }
 

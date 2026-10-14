@@ -5,13 +5,14 @@ import {
   decideNavigation,
   decideWindowOpen,
   hasPrivilegedPrefs,
+  isConfinedContents,
   isExpectedLoadAbort,
   isPermissionAllowed,
   isSameLocalPage,
   localPageKey,
   toExternalHref
 } from '../../src/main/security/navigationPolicy'
-import type { PolicyContext } from '../../src/main/security/navigationPolicy'
+import type { ConfinementProbe, PolicyContext } from '../../src/main/security/navigationPolicy'
 
 function ctx(local: string[] = [], siteUrl?: string): PolicyContext {
   const registry = new LocalPageRegistry()
@@ -66,6 +67,40 @@ describe('localPageKey', () => {
     for (const url of ['data:text/html,x', 'about:blank', 'blob:https://x.atlassian.net/1', 'javascript:1', 'not a url', '']) {
       expect(localPageKey(url)).toBeNull()
     }
+  })
+})
+
+describe('isConfinedContents', () => {
+  const plain = { sandbox: true, contextIsolation: true, nodeIntegration: false, nodeIntegrationInSubFrames: false, nodeIntegrationInWorker: false, webviewTag: false }
+  const LOCAL = 'file:///app/dist/renderer/dialog.html'
+  const isLocal = (url: string): boolean => url === LOCAL
+  function probe(overrides: Partial<ConfinementProbe> = {}): ConfinementProbe {
+    return { registered: false, prefs: () => plain, preload: () => undefined, url: () => 'https://team.atlassian.net/', ...overrides }
+  }
+  const boom = (): never => { throw new Error('internals changed') }
+
+  it('is false for a plain remote contents', () => {
+    expect(isConfinedContents(probe(), isLocal)).toBe(false)
+  })
+  it('is true for a registered contents even when every other signal says plain', () => {
+    expect(isConfinedContents(probe({ registered: true }), isLocal)).toBe(true)
+    expect(isConfinedContents(probe({ registered: true, prefs: boom, preload: boom, url: boom }), isLocal)).toBe(true)
+  })
+  it('is true when the preload getter reports a preload the prefs leave out', () => {
+    expect(isConfinedContents(probe({ preload: () => '/app/dist/preload/dialog.js' }), isLocal)).toBe(true)
+  })
+  it('is true for privileged prefs, unknown prefs, and a local page', () => {
+    expect(isConfinedContents(probe({ prefs: () => ({ ...plain, nodeIntegration: true }) }), isLocal)).toBe(true)
+    expect(isConfinedContents(probe({ prefs: () => undefined }), isLocal)).toBe(true)
+    expect(isConfinedContents(probe({ prefs: () => null }), isLocal)).toBe(true)
+    expect(isConfinedContents(probe({ url: () => LOCAL }), isLocal)).toBe(true)
+  })
+  it('fails closed, without throwing, when any getter throws', () => {
+    for (const broken of [{ prefs: boom }, { preload: boom }, { url: boom }]) {
+      expect(() => isConfinedContents(probe(broken), isLocal)).not.toThrow()
+      expect(isConfinedContents(probe(broken), isLocal), Object.keys(broken)[0]).toBe(true)
+    }
+    expect(isConfinedContents(probe(), boom)).toBe(true)
   })
 })
 

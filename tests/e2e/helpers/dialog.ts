@@ -28,3 +28,15 @@ export async function openDialog(app: LaunchedApp, label: AppMenuLabel): Promise
   await expect(page.locator('#submit')).toBeEnabled()
   return page
 }
+
+// Runs an action that makes main close the dialog (Cancel, Escape, Enter, a successful Submit) and
+// waits for the close. Playwright waits for Chromium's input ack, and under load the window can be
+// destroyed first, so the action rejecting with "…has been closed" is expected and ignored.
+export async function closeVia(page: Page, action: () => Promise<unknown>): Promise<void> {
+  const done = page.isClosed() ? Promise.resolve() : page.waitForEvent('close')
+  done.catch(() => {})
+  await action().catch((error: unknown) => {
+    if (!/closed/i.test(String(error))) throw error
+  })
+  await done
+}
