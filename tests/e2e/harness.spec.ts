@@ -90,6 +90,19 @@ test('refuses and records Chromium\'s own OS protocol hand-off, whatever handler
   expect(await page.evaluate(() => Notification.requestPermission())).toBe('granted')
 })
 
+// A media-permission regression must fail on fake devices, never reach the real microphone or a
+// macOS privacy prompt; and the fakes must not come with auto-accept, which bypasses the app's handler.
+// codex:run npm run test:e2e -- tests/e2e/harness.spec.ts
+test('capture devices are Chromium\'s fakes, without the auto-accepting fake UI', async ({ launchApp }) => {
+  const app = await launchApp()
+  await app.electronApp.firstWindow()
+  const switches = await app.electronApp.evaluate(({ app: electronApp }) => ({
+    fakeDevice: electronApp.commandLine.hasSwitch('use-fake-device-for-media-stream'),
+    fakeUi: electronApp.commandLine.hasSwitch('use-fake-ui-for-media-stream')
+  }))
+  expect(switches).toEqual({ fakeDevice: true, fakeUi: false })
+})
+
 test('applies launch-time stubs before the app starts, and stubs after launch', async ({ launchApp }) => {
   const app = await launchApp({
     stubs: [

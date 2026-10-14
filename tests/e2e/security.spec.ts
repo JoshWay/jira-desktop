@@ -339,6 +339,47 @@ test('permissions: in-app content gets notifications but not media; other origin
   expect(await page.evaluate(() => navigator.permissions.query({ name: 'notifications' }).then((s) => s.state))).toBe('denied')
 })
 
+// The wiring must judge a frame by its own origin (requestingUrl / requestingOrigin), not by the
+// page that embeds it. Only notifications tell the two apart: Electron does not apply Chrome's
+// cross-origin-iframe notification block, and Permissions Policy does not cover them.
+// codex:run npm run test:e2e -- tests/e2e/security.spec.ts -g "third-party frame"
+test('permissions: a third-party frame inside an in-app page is judged by its own origin', async ({ launchApp }) => {
+  const host = 'https://e2e.atlassian.net/jira'
+  const app = await launchApp({
+    routes: [{ url: host, response: { body: '<!doctype html><title>host</title><iframe src="https://evil.test/frame"></iframe>' } }]
+  })
+  const page = await app.electronApp.firstWindow()
+  await expect(page).toHaveURL(START_URL)
+  await page.evaluate((url) => { window.location.href = url }, host)
+  await expect(page).toHaveURL(host)
+  await expect.poll(() => page.frames().find((f) => f.url() === 'https://evil.test/frame')?.evaluate(() => document.readyState)).toBe('complete')
+  const frame = page.frames().find((f) => f.url() === 'https://evil.test/frame')!
+
+  // Request handler (requestPermission) and check handler (permissions.query) both deny the frame...
+  expect(await frame.evaluate(() => Notification.requestPermission())).toBe('denied')
+  expect(await frame.evaluate(() => navigator.permissions.query({ name: 'notifications' }).then((s) => s.state))).toBe('denied')
+  // ...while the in-app page around it still gets them
+  expect(await page.evaluate(() => Notification.requestPermission())).toBe('granted')
+  expect(await page.evaluate(() => navigator.permissions.query({ name: 'notifications' }).then((s) => s.state))).toBe('granted')
+})
+
+// Sessions other than the default one (partitions created later) get the same permission policy
+// codex:run npm run test:e2e -- tests/e2e/security.spec.ts -g "partition session"
+test('permissions: a partition session created after startup gets the same policy', async ({ launchApp }) => {
+  const app = await launchApp()
+  await app.electronApp.firstWindow()
+  const probeUrl = 'https://evil.test/probe'
+  const opened = app.electronApp.waitForEvent('window', { predicate: (p) => p.url() === probeUrl })
+  await app.electronApp.evaluate(({ BrowserWindow }, url) => {
+    const win = new BrowserWindow({ show: false, webPreferences: { partition: 'persist:probe', sandbox: true, contextIsolation: true } })
+    void win.loadURL(url)
+  }, probeUrl)
+  const probe = await opened
+  expect(await probe.evaluate(() => Notification.requestPermission())).toBe('denied')
+  expect(await probe.evaluate(() => navigator.permissions.query({ name: 'notifications' }).then((s) => s.state))).toBe('denied')
+  expect(await app.requests()).toContainEqual({ url: probeUrl, method: 'GET', session: 'persist:probe', servedWith: 'stub-page' })
+})
+
 test('permissions: a subframe navigating to an unsafe scheme is refused by the app itself', async ({ launchApp }) => {
   const app = await launchApp()
   const page = await app.electronApp.firstWindow()
