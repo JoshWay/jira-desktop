@@ -5,7 +5,7 @@
 // codex:run npm run test:e2e -- tests/e2e/dialog.spec.ts
 import { ipcMain } from 'electron'
 import type { WebContents } from 'electron'
-import { isFromLocalPage } from './localPageSender'
+import { findLocalPageSender, isFromLocalPage } from './localPageSender'
 
 export interface LocalPage {
   contents: WebContents
@@ -26,6 +26,23 @@ export function handleFromLocalPage<P extends LocalPage, R>(
   ipcMain.handle(channel, async (event, ...args: unknown[]) => {
     const page = currentPage()
     if (!page || !isFromLocalPage(event, page)) throw new Error(`${channel}: sender is not the expected local page`)
+    return handler(page, ...args)
+  })
+}
+
+// As handleFromLocalPage, for a page that can be open in several places at once (the find bar,
+// one per window): each call is answered only for the open page it comes from (main frame, exact
+// page), and that page is what the handler gets.
+// codex:run npm test -- tests/unit/localPageSender.test.ts
+// codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+export function handleFromAnyLocalPage<P extends LocalPage, R>(
+  channel: string,
+  openPages: () => Iterable<P>,
+  handler: (page: P, ...args: unknown[]) => R | Promise<R>
+): void {
+  ipcMain.handle(channel, async (event, ...args: unknown[]) => {
+    const page = findLocalPageSender(event, openPages())
+    if (!page) throw new Error(`${channel}: sender is not an open local page`)
     return handler(page, ...args)
   })
 }
