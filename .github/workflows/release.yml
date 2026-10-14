@@ -4,8 +4,9 @@ on:
   push:
     branches: [main, dev]
     tags: ['v*']
+  # Every pull request, whatever its base: stacked PRs target feature/* branches, and the top of
+  # the stack carries the whole change, so it must run the full matrix before anything merges.
   pull_request:
-    branches: [main, dev]
 
 # Least privilege: every job reads the repo only. The release job alone may write (spec R5).
 permissions:
@@ -19,6 +20,9 @@ jobs:
   build:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    outputs:
+      # Set by tag builds only (identical on every matrix leg); the release job reads it
+      prerelease: ${{ steps.version.outputs.prerelease }}
     strategy:
       fail-fast: false
       matrix:
@@ -36,6 +40,14 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+
+      # A tag must be exactly v + package.json version, or the release would carry a feed
+      # (latest*.yml) for a different version. Fails before anything is built.
+      # codex:run npm test -- tests/unit/releaseVersion.test.ts
+      - name: Check the tag matches package.json (tags)
+        id: version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/release-version.mjs
 
       - name: Install dependencies
         run: npm ci
@@ -80,23 +92,41 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends rpm
 
       # Packages only; the release job is the one place that publishes. Signing and notarization
-      # run when their secrets are configured (never for pull requests) and are skipped otherwise.
+      # run on release tag builds when their secrets are configured, and never on branch pushes or
+      # pull requests (nothing they build is published).
       - name: Package
         shell: bash
         env:
-          CSC_LINK: ${{ github.event_name != 'pull_request' && runner.os == 'macOS' && secrets.MAC_CSC_LINK || '' }}
-          CSC_KEY_PASSWORD: ${{ github.event_name != 'pull_request' && runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
-          APPLE_ID: ${{ github.event_name != 'pull_request' && runner.os == 'macOS' && secrets.APPLE_ID || '' }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ github.event_name != 'pull_request' && runner.os == 'macOS' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ github.event_name != 'pull_request' && runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
-          WIN_CSC_LINK: ${{ github.event_name != 'pull_request' && runner.os == 'Windows' && secrets.WIN_CSC_LINK || '' }}
-          WIN_CSC_KEY_PASSWORD: ${{ github.event_name != 'pull_request' && runner.os == 'Windows' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
+          CSC_LINK: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'macOS' && secrets.MAC_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'macOS' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'macOS' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
+          WIN_CSC_LINK: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'Windows' && secrets.WIN_CSC_LINK || '' }}
+          WIN_CSC_KEY_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'Windows' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
         run: |
           # electron-builder treats an empty CSC_LINK as set (and fails), so drop unset secrets
           for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID WIN_CSC_LINK WIN_CSC_KEY_PASSWORD; do
             if [ -z "${!name}" ]; then unset "$name"; fi
           done
           npx electron-builder --publish never
+
+      # Squirrel.Mac only installs an update signed to match the running app, so an ad-hoc signed
+      # mac build must not ship an update feed: every in-app "Update Now" would fail. Without
+      # signing, the release keeps the mac .dmg/.zip as manual downloads but drops latest-mac.yml
+      # and the zip blockmaps; mac clients then find no update. Windows and Linux are unaffected.
+      - name: Withhold the macOS update feed (unsigned tag build)
+        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          MAC_SIGNED: ${{ secrets.MAC_CSC_LINK != '' }}
+        run: |
+          if [ "$MAC_SIGNED" = "true" ]; then
+            echo "macOS build is signed; publishing latest-mac.yml"
+            exit 0
+          fi
+          rm -f release/latest-mac.yml release/*.zip.blockmap
+          echo "::warning title=macOS update feed withheld::MAC_CSC_LINK is not configured, so the macOS build is ad-hoc signed and cannot install as an in-app update. latest-mac.yml and the zip blockmaps are not published; mac users must download this release manually."
 
       # Installers plus the updater metadata (latest*.yml) and blockmaps for differential updates
       - name: Upload packages
@@ -144,4 +174,5 @@ jobs:
             release/*.blockmap
           fail_on_unmatched_files: true
           draft: false
-          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+          # From the semver pre-release part of the checked version (build job), not a ref substring
+          prerelease: ${{ needs.build.outputs.prerelease == 'true' }}
