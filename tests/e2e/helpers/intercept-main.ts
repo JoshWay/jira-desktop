@@ -35,10 +35,6 @@ if (!Number.isInteger(sinkPort) || sinkPort <= 0) {
 app.commandLine.appendSwitch('proxy-server', `http://127.0.0.1:${sinkPort}`)
 app.commandLine.appendSwitch('proxy-bypass-list', '<-loopback>')
 app.commandLine.appendSwitch('host-resolver-rules', 'MAP * ~NOTFOUND, EXCLUDE 127.0.0.1')
-// Chromium's component updater phones home (redirector.gvt1.com) on Linux CI runners. It is
-// browser background traffic, not the app's; switch it off so the sink stays strict for the rest.
-// codex:run npm run test:e2e -- tests/e2e/harness.spec.ts
-app.commandLine.appendSwitch('disable-component-update')
 
 const headed = process.env.JIRA_DESKTOP_E2E_HEADED === '1'
 
@@ -135,6 +131,11 @@ const intercepted = new WeakSet<Session>()
 function intercept(ses: Session): void {
   if (intercepted.has(ses)) return
   intercepted.add(ses)
+  // On Linux, Electron spell-checks with Hunspell and downloads its dictionaries from
+  // redirector.gvt1.com, outside protocol interception (macOS/Windows use the OS checker and
+  // never fetch). Turn the checker off in e2e so the escape sink stays strict for everything else.
+  // codex:run npm run test:e2e -- tests/e2e/harness.spec.ts
+  if (process.platform === 'linux') ses.setSpellCheckerEnabled(false)
   for (const scheme of ['https', 'http']) {
     ses.protocol.handle(scheme, (request) => respond(request, ses))
   }
