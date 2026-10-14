@@ -26,3 +26,6 @@ node_modules/
 .DS_Store
 dist/
 release/
+test-results/
+playwright-report/
+.superpowers/
