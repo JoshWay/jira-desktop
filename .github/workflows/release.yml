@@ -72,7 +72,7 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p "$RUNNER_TEMP/netlog"
-          E2E_NETLOG_DIR="$RUNNER_TEMP/netlog" xvfb-run -a npx playwright test tests/e2e/smoke.spec.ts || true
+          E2E_NETLOG_DIR="$RUNNER_TEMP/netlog" xvfb-run -a npm run test:e2e -- tests/e2e/smoke.spec.ts || true
           ls -la "$RUNNER_TEMP/netlog"
           for f in "$RUNNER_TEMP"/netlog/*.json; do echo "== $f"; grep -oE '"(url|original_url|location)":"[^"]*(gvt1|gstatic|google)[^"]*"' "$f" | sort | uniq -c; done
           python3 - "$RUNNER_TEMP/netlog" <<'PY'
