@@ -1,7 +1,7 @@
 import { test as base, expect, _electron } from '@playwright/test'
 import type { ElectronApplication } from '@playwright/test'
 import { spawn } from 'node:child_process'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import type { Server, Socket } from 'node:net'
@@ -137,6 +137,24 @@ export class LaunchedApp {
   }
 }
 
+// On Linux, Electron spell-checks with Hunspell and downloads the locale's dictionary from
+// redirector.gvt1.com as the profile loads, before any main-process hook can turn it off. Seed
+// the Chromium profile (userData/Preferences) with spell-checking off and no dictionaries, so the
+// escape sink stays strict for everything else. Merges into a profile a previous launch wrote.
+// codex:run npm run test:e2e -- tests/e2e/harness.spec.ts
+async function seedChromiumPrefs(userDataDir: string): Promise<void> {
+  const file = join(userDataDir, 'Preferences')
+  let prefs: Record<string, any> = {}
+  try {
+    prefs = JSON.parse(await readFile(file, 'utf8'))
+  } catch {
+    // first launch on this profile
+  }
+  prefs.browser = { ...prefs.browser, enable_spellchecking: false }
+  prefs.spellcheck = { ...prefs.spellcheck, dictionaries: [] }
+  await writeFile(file, JSON.stringify(prefs))
+}
+
 // `-r` runs the interceptor in the main process before the app's main module loads
 const APP_ARGS = ['-r', interceptModule, repoRoot]
 
@@ -153,6 +171,7 @@ function appEnv(sink: EscapeSink, userDataDir: string, opts: LaunchOptions): Rec
 }
 
 async function launch(sink: EscapeSink, userDataDir: string, opts: LaunchOptions): Promise<LaunchedApp> {
+  await seedChromiumPrefs(userDataDir)
   const electronApp = await _electron.launch({ args: APP_ARGS, cwd: repoRoot, env: appEnv(sink, userDataDir, opts) })
   return new LaunchedApp(electronApp, userDataDir)
 }
@@ -168,6 +187,7 @@ export interface InstanceExit {
 // which cannot attach to a process that quits during startup), with the same interceptor, and
 // resolves when it exits. Killed if it is still running after timeoutMs.
 export async function runAnotherInstance(sink: EscapeSink, userDataDir: string, timeoutMs = 30_000): Promise<InstanceExit> {
+  await seedChromiumPrefs(userDataDir)
   const electronBinary = createRequire(__filename)('electron') as string
   const child = spawn(electronBinary, APP_ARGS, { cwd: repoRoot, env: appEnv(sink, userDataDir, {}), stdio: 'ignore' })
   let killed = false
