@@ -201,11 +201,6 @@ function intercept(ses: Session): void {
   if (intercepted.has(ses)) return
   intercepted.add(ses)
   guardExternalProtocols(ses)
-  // On Linux, Electron spell-checks with Hunspell and downloads its dictionaries from
-  // redirector.gvt1.com, outside protocol interception (macOS/Windows use the OS checker and
-  // never fetch). Turn the checker off in e2e so the escape sink stays strict for everything else.
-  // codex:run npm run test:e2e -- tests/e2e/harness.spec.ts
-  if (process.platform === 'linux') ses.setSpellCheckerEnabled(false)
   for (const scheme of ['https', 'http']) {
     ses.protocol.handle(scheme, (request) => respond(request, ses))
   }
