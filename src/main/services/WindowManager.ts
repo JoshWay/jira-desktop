@@ -1,7 +1,12 @@
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, screen } from 'electron'
 import { join } from 'path'
 import { StorageService } from './StorageService'
+import type { StorageData } from './StorageService'
+import { fitBoundsToDisplays } from './windowBounds'
 import { hostMatches } from '../security/urlPolicy'
+
+// Every window's floor; saved bounds smaller than this grow to it when restored
+const MIN_WINDOW_SIZE = Object.freeze({ width: 800, height: 600 })
 
 export interface AtlassianProduct {
   id: string
@@ -31,8 +36,45 @@ export interface WindowState {
 }
 
 // Shape of window-states.json
-interface WindowStatesFile {
+export interface WindowStatesFile {
   windowStates?: WindowState[]
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+// One saved entry rebuilt from its known fields only, or null when it has no string id/productId
+// or its bounds are not four finite numbers. Nothing else in the entry survives.
+function sanitizeWindowState(raw: unknown): WindowState | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const { id, productId, url, bounds, isMaximized, isMinimized } = raw as Record<string, unknown>
+  if (typeof id !== 'string' || typeof productId !== 'string') return null
+  if (typeof bounds !== 'object' || bounds === null) return null
+  const { x, y, width, height } = bounds as Record<string, unknown>
+  if (!isFiniteNumber(x) || !isFiniteNumber(y) || !isFiniteNumber(width) || !isFiniteNumber(height)) return null
+  return {
+    id,
+    productId,
+    url: typeof url === 'string' ? url : '',
+    bounds: { x, y, width, height },
+    isMaximized: isMaximized === true,
+    isMinimized: isMinimized === true
+  }
+}
+
+// window-states.json is outside the app's control: its entries reach the BrowserWindow
+// constructor, so only well-formed ones are kept, each rebuilt from its known fields. Unknown
+// top-level fields are kept, as in settings.json.
+// codex:run npm test -- tests/unit/WindowManager.test.ts
+export function sanitizeWindowStates(raw: StorageData): WindowStatesFile {
+  const file: StorageData = { ...raw }
+  if (Array.isArray(raw.windowStates)) {
+    file.windowStates = raw.windowStates.map(sanitizeWindowState).filter((state) => state !== null)
+  } else {
+    delete file.windowStates
+  }
+  return file as WindowStatesFile
 }
 
 export class WindowManager {
@@ -95,7 +137,7 @@ export class WindowManager {
   constructor() {
     // StorageService loads synchronously, so saved states are available here (spec R3)
     // codex:run npm test -- tests/unit/WindowManager.test.ts
-    this.storage = new StorageService<WindowStatesFile>('window-states.json')
+    this.storage = new StorageService<WindowStatesFile>('window-states.json', { sanitize: sanitizeWindowStates })
     this.loadWindowStates()
   }
 
@@ -146,18 +188,24 @@ export class WindowManager {
         this.windows.delete(windowId)
       }
 
+      // Saved bounds only while they are on a display that still exists, pulled fully onto it, and
+      // only their four numbers: never the stored object itself (spec R3)
+      // codex:run npm test -- tests/unit/WindowManager.test.ts
       const savedState = this.windowStates.get(windowId)
-      const bounds = savedState?.bounds || {
-        x: undefined,
-        y: undefined,
-        width: config.size?.width || config.product.defaultSize.width,
-        height: config.size?.height || config.product.defaultSize.height
-      }
+      const fitted = savedState
+        ? fitBoundsToDisplays(savedState.bounds, screen.getAllDisplays().map((display) => display.workArea), MIN_WINDOW_SIZE)
+        : null
+      const placement = fitted
+        ? { x: fitted.x, y: fitted.y, width: fitted.width, height: fitted.height }
+        : {
+            width: config.size?.width || config.product.defaultSize.width,
+            height: config.size?.height || config.product.defaultSize.height
+          }
 
       const window = new BrowserWindow({
-        ...bounds,
-        minWidth: 800,
-        minHeight: 600,
+        ...placement,
+        minWidth: MIN_WINDOW_SIZE.width,
+        minHeight: MIN_WINDOW_SIZE.height,
         show: false,
         title: config.title || `${config.product.name} - Jira Desktop`,
         icon: this.getProductIcon(config.product),
@@ -191,7 +239,7 @@ export class WindowManager {
       }
 
       // Restore maximized state
-      if (savedState?.isMaximized) {
+      if (savedState?.isMaximized === true) {
         window.maximize()
       }
 
