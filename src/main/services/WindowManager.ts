@@ -82,6 +82,8 @@ export class WindowManager {
   private windowStates: Map<string, WindowState> = new Map()
   private storage: StorageService<WindowStatesFile>
   private saveStateTimeout: NodeJS.Timeout | null = null
+  // Called with each window right after it is constructed, before it loads anything
+  private readonly onWindowCreated?: (window: BrowserWindow) => void
 
   private readonly products: Map<string, AtlassianProduct> = new Map([
     ['jira', {
@@ -134,7 +136,10 @@ export class WindowManager {
     }]
   ])
 
-  constructor() {
+  // onWindowCreated: lets main make every window it creates a content window (navigation, find)
+  // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+  constructor(onWindowCreated?: (window: BrowserWindow) => void) {
+    this.onWindowCreated = onWindowCreated
     // StorageService loads synchronously, so saved states are available here (spec R3)
     // codex:run npm test -- tests/unit/WindowManager.test.ts
     this.storage = new StorageService<WindowStatesFile>('window-states.json', { sanitize: sanitizeWindowStates })
@@ -220,6 +225,9 @@ export class WindowManager {
           allowRunningInsecureContent: false
         }
       })
+
+      // codex:run npm test -- tests/unit/WindowManager.test.ts
+      this.onWindowCreated?.(window)
 
       // Setup window event handlers
       this.setupWindowEvents(window, windowId, config.product)

@@ -4,7 +4,7 @@ import { join, resolve } from 'path'
 import { WindowManager } from './services/WindowManager'
 import { ContextMenuService } from './services/ContextMenuService'
 import { installWebContentsPolicy, isLocalPageUrl, registerLocalPage } from './security/webContentsPolicy'
-import { isExpectedLoadAbort } from './security/navigationPolicy'
+import { decideNavigation, isExpectedLoadAbort } from './security/navigationPolicy'
 import { localPageUrl } from './security/localPageUrl'
 import { DialogController } from './dialogs/DialogController'
 import { createSettingsStore } from './services/settings'
@@ -12,6 +12,9 @@ import type { SettingsStore, ThemeSource } from './services/settings'
 import { STRANDED_LOAD_DESCRIPTION, describeLoadFailure, isStranded, resolveSavedSiteUrl, shouldShowLoadError } from './services/mainWindowRules'
 import type { LoadFailure } from './services/mainWindowRules'
 import { mainWindowPlacement } from './services/windowBounds'
+import { NavigationController } from './navigation/NavigationController'
+import { sanitizeUserAgent } from './navigation/userAgent'
+import { FindBarController } from './find/FindBarController'
 
 const DEFAULT_WINDOW_SIZE = Object.freeze({ width: 1200, height: 900 })
 const MIN_WINDOW_SIZE = Object.freeze({ width: 800, height: 600 })
@@ -36,6 +39,8 @@ class JiraApp {
   private contextMenuService: ContextMenuService
   private dialogs: DialogController
   private settings: SettingsStore
+  private navigation: NavigationController
+  private findBars: FindBarController
   // The static page the main window shows while no site is loaded (first run, failed load)
   private readonly placeholderUrl: string
   private siteUrlCache: { raw: unknown; url: string | undefined } | null = null
@@ -46,8 +51,24 @@ class JiraApp {
     // Script-free and preload-free; registered so remote content can never navigate to it
     this.placeholderUrl = localPageUrl('placeholder.html')
     registerLocalPage(this.placeholderUrl)
-    this.windowManager = new WindowManager()
-    this.contextMenuService = new ContextMenuService(this.windowManager, () => this.siteUrl())
+    // Registers the find bar's IPC channels and page once, at startup (spec R4)
+    // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+    this.findBars = new FindBarController()
+    this.navigation = new NavigationController({
+      isLocalPage: isLocalPageUrl,
+      // As for a remote-content window's own navigation, against the site configured now
+      // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+      isAllowedInWindow: (url) => decideNavigation(url, false, { siteUrl: this.siteUrl(), isLocalPage: isLocalPageUrl }) === 'allow',
+      openFind: (owner) => this.findBars.open(owner),
+      // Back / Forward from the load-error placeholder: as any other site load, about:blank first
+      // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+      leaveLocalPage: (win, url) => this.loadSite(url, win)
+    })
+    // WindowManager windows are content windows too: Back/Forward, swipe, app-command and Find
+    this.windowManager = new WindowManager((window) => this.navigation.attach(window))
+    // Its Back / Forward go through the navigation controller, like the Go menu's
+    // codex:run npm test -- tests/unit/ContextMenuService.test.ts
+    this.contextMenuService = new ContextMenuService(this.windowManager, () => this.siteUrl(), this.navigation)
     // Registers the dialog IPC channels once, at startup (spec R2)
     // codex:run npm run test:e2e -- tests/e2e/dialog.spec.ts
     // codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
@@ -85,6 +106,12 @@ class JiraApp {
   }
 
   private initializeApp(): void {
+    // Electron's default UA without its Electron/<v> and <app name>/<v> tokens, which Google sign-in
+    // refuses (spec R4). Set before 'ready', so the default session and every window get it.
+    // codex:run npm test -- tests/unit/userAgent.test.ts
+    // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+    app.userAgentFallback = sanitizeUserAgent(app.userAgentFallback, ['Electron', app.getName()])
+
     // Navigation, window.open, <webview> and permission policy for every webContents and session
     // (spec R2). Installed before 'ready' so it covers the first window.
     // codex:run npm run test:e2e -- tests/e2e/security.spec.ts
@@ -216,6 +243,8 @@ class JiraApp {
     })
 
     this.contextMenuService.setupForWindow(win)
+    // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+    this.navigation.attach(win)
 
     const site = this.siteUrl()
     if (site) this.loadSite(site)
@@ -244,17 +273,17 @@ class JiraApp {
     this.showPlaceholder(win, () => this.dialogs.showLoadError(failure))
   }
 
-  // Loads a site URL (already validated: the saved site, a dialog result or a load failure's
-  // retryUrl) in the main window. While it shows the placeholder, a local page, the policy treats
-  // it as confined and would hand the site's own redirects to the browser; so it leaves the
-  // placeholder for about:blank first.
+  // Loads a site URL (already validated: the saved site, a dialog result, a load failure's retryUrl
+  // or a history entry Back / Forward chose) in the main window, or in `win`. While it shows the
+  // placeholder, a local page, the policy treats it as confined and would hand the site's own
+  // redirects to the browser; so it leaves the placeholder for about:blank first.
   // A site load that ends with nothing to show for it shows the error view, not a blank (at startup,
   // never shown) window. The policy cancelling the site's redirect (sent to the browser, or refused)
   // does that: no did-fail-load fires and nothing commits; loadURL only rejects.
   // codex:run npm test -- tests/unit/mainWindowRules.test.ts
   // codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
-  private loadSite(url: string): void {
-    const win = this.mainWindow
+  // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+  private loadSite(url: string, win: BrowserWindow | null = this.mainWindow): void {
     if (!win || win.isDestroyed()) return
     const load = (): void => {
       if (win.isDestroyed()) return
@@ -270,6 +299,8 @@ class JiraApp {
   }
 
   private setupMenu(): void {
+    // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+    const navigation = this.navigation.menuItems()
     const template: Electron.MenuItemConstructorOptions[] = [
       {
         label: 'Jira Desktop',
@@ -314,7 +345,9 @@ class JiraApp {
           { role: 'cut' },
           { role: 'copy' },
           { role: 'paste' },
-          { role: 'selectAll' }
+          { role: 'selectAll' },
+          { type: 'separator' },
+          navigation.find
         ]
       },
       {
@@ -343,6 +376,10 @@ class JiraApp {
         ]
       },
       {
+        label: 'Go',
+        submenu: navigation.go
+      },
+      {
         label: 'Window',
         submenu: [
           { role: 'minimize' },
@@ -353,6 +390,7 @@ class JiraApp {
 
     const menu = Menu.buildFromTemplate(template)
     Menu.setApplicationMenu(menu)
+    this.navigation.refreshMenu()
   }
 
   // Applied, persisted, and the menu rebuilt so exactly the chosen radio is checked
