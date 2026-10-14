@@ -1,5 +1,6 @@
-import { BrowserWindow, Menu, MenuItem, ipcMain } from 'electron'
+import { BrowserWindow, Menu, MenuItem } from 'electron'
 import { WindowManager, WindowConfig } from './WindowManager'
+import { isInAppUrl } from '../security/urlPolicy'
 
 export interface ContextMenuParams {
   x: number
@@ -16,17 +17,6 @@ export class ContextMenuService {
 
   constructor(windowManager: WindowManager) {
     this.windowManager = windowManager
-    this.setupContextMenuHandlers()
-  }
-
-  private setupContextMenuHandlers(): void {
-    // Handle context menu events from webContents
-    ipcMain.handle('show-context-menu', async (event, params: ContextMenuParams) => {
-      const sourceWindow = BrowserWindow.fromWebContents(event.sender)
-      if (!sourceWindow) return
-
-      await this.showContextMenu(sourceWindow, params)
-    })
   }
 
   public setupForWindow(window: BrowserWindow): void {
@@ -89,12 +79,14 @@ export class ContextMenuService {
     }
 
     // Add separator if we have standard items and will add Atlassian items
-    if (menuItems.length > 0 && params.linkURL && this.isAtlassianLink(params.linkURL)) {
+    // codex:run npm run test:e2e -- tests/e2e/security.spec.ts
+    const inAppLink = !!params.linkURL && isInAppUrl(params.linkURL)
+    if (menuItems.length > 0 && inAppLink) {
       menuItems.push(new MenuItem({ type: 'separator' }))
     }
 
     // Atlassian-specific menu items
-    if (params.linkURL && this.isAtlassianLink(params.linkURL)) {
+    if (inAppLink) {
       const product = this.windowManager.identifyProduct(params.linkURL)
       const productName = product ? product.name : 'Atlassian'
 
@@ -220,24 +212,6 @@ export class ContextMenuService {
       })
     }
   }
-
-  private isAtlassianLink(url: string): boolean {
-    try {
-      const parsedUrl = new URL(url)
-      const hostname = parsedUrl.hostname.toLowerCase()
-      
-      return (
-        hostname.includes('atlassian.net') ||
-        hostname.includes('atlassian.com') ||
-        hostname.includes('bitbucket.org') ||
-        hostname.includes('trello.com') ||
-        hostname === 'id.atlassian.com'
-      )
-    } catch {
-      return false
-    }
-  }
-
 
   private emitTelemetryEvent(eventName: string, data: any): void {
     // TODO: Implement telemetry emission

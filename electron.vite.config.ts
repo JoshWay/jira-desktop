@@ -12,16 +12,6 @@ export default defineConfig({
       }
     }
   },
-  preload: {
-    build: {
-      outDir: 'dist/preload',
-      rollupOptions: {
-        input: {
-          index: resolve(__dirname, 'src/preload/preload.ts')
-        }
-      }
-    }
-  },
   renderer: {
     root: 'src/renderer',
     build: {

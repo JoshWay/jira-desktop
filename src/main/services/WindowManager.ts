@@ -1,6 +1,7 @@
 import { BrowserWindow } from 'electron'
 import { join } from 'path'
 import { StorageService } from './StorageService'
+import { hostMatches } from '../security/urlPolicy'
 
 export interface AtlassianProduct {
   id: string
@@ -32,7 +33,6 @@ export interface WindowState {
 export class WindowManager {
   private windows: Map<string, BrowserWindow> = new Map()
   private windowStates: Map<string, WindowState> = new Map()
-  private sessionPartition: string = 'persist:atlassian-shared'
   private storage: StorageService
   private saveStateTimeout: NodeJS.Timeout | null = null
 
@@ -114,7 +114,8 @@ export class WindowManager {
       }
 
       // Fallback: if it's an Atlassian domain but no specific product match
-      if (hostname.includes('atlassian.net') || hostname.includes('atlassian.com')) {
+      // codex:run npm run test:e2e -- tests/e2e/security.spec.ts
+      if (hostMatches(hostname, 'atlassian.net') || hostMatches(hostname, 'atlassian.com')) {
         return this.products.get('jira') || null
       }
 
@@ -154,10 +155,10 @@ export class WindowManager {
         title: config.title || `${config.product.name} - Jira Desktop`,
         icon: this.getProductIcon(config.product),
         backgroundColor: config.product.backgroundColor,
+        // Default session (shares the main window's login); remote content gets no preload (spec R2).
+        // Navigation is governed globally by security/webContentsPolicy.
         webPreferences: {
-          partition: this.sessionPartition,
-          preload: join(__dirname, '../preload/preload.js'),
-          sandbox: false,
+          sandbox: true,
           nodeIntegration: false,
           contextIsolation: true,
           webSecurity: true,
@@ -252,17 +253,6 @@ export class WindowManager {
     window.on('ready-to-show', () => {
       window.show()
     })
-
-    // Setup navigation handling specific to this window
-    window.webContents.on('will-navigate', (event, navigationUrl) => {
-      // Allow navigation within Atlassian domains
-      if (this.isAtlassianUrl(navigationUrl)) {
-        return
-      }
-      
-      // Prevent navigation to external sites
-      event.preventDefault()
-    })
   }
 
   private generateWindowId(productId: string, url: string): string {
@@ -286,22 +276,6 @@ export class WindowManager {
 
   private getProductIcon(product: AtlassianProduct): string {
     return join(__dirname, '../../resources', product.icon)
-  }
-
-  private isAtlassianUrl(url: string): boolean {
-    try {
-      const parsedUrl = new URL(url)
-      const hostname = parsedUrl.hostname.toLowerCase()
-      
-      return (
-        hostname.includes('atlassian.net') ||
-        hostname.includes('atlassian.com') ||
-        hostname.includes('bitbucket.org') ||
-        hostname.includes('trello.com')
-      )
-    } catch {
-      return false
-    }
   }
 
   private loadWindowStates(): void {

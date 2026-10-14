@@ -1,8 +1,9 @@
-import { app, BrowserWindow, Menu, nativeTheme, ipcMain, shell, dialog } from 'electron'
+import { app, BrowserWindow, Menu, nativeTheme, ipcMain, dialog } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { join, resolve } from 'path'
 import { WindowManager } from './services/WindowManager'
 import { ContextMenuService } from './services/ContextMenuService'
+import { installWebContentsPolicy } from './security/webContentsPolicy'
 
 class JiraApp {
   private mainWindow: BrowserWindow | null = null
@@ -19,11 +20,15 @@ class JiraApp {
   }
 
   private initializeApp(): void {
+    // Navigation, window.open, <webview> and permission policy for every webContents and session
+    // (spec R2). Installed before 'ready' so it covers the first window.
+    // codex:run npm run test:e2e -- tests/e2e/security.spec.ts
+    installWebContentsPolicy(() => this.jiraUrl)
+
     // Handle app ready
     app.whenReady().then(() => {
       this.createWindow()
       this.setupMenu()
-      this.setupIpcHandlers()
 
       app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) {
@@ -44,39 +49,6 @@ class JiraApp {
     app.on('before-quit', () => {
       this.windowManager.closeAllWindows()
     })
-
-    // Handle external links and navigation
-    app.on('web-contents-created', (_, contents) => {
-      // Handle new window creation (target="_blank" links)
-      contents.setWindowOpenHandler(({ url }) => {
-        if (this.isAtlassianUrl(url)) {
-          // Navigate in current window instead of opening new window
-          if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-            this.mainWindow.loadURL(url)
-          }
-          return { action: 'deny' }
-        }
-        shell.openExternal(url)
-        return { action: 'deny' }
-      })
-
-      // Handle navigation within the same window (including dropdown menu clicks)
-      contents.on('will-navigate', (event, navigationUrl) => {
-        const currentUrl = contents.getURL()
-        
-        // Allow navigation within Atlassian domains
-        if (this.isAtlassianUrl(navigationUrl)) {
-          // Allow the navigation to proceed within the app
-          return
-        }
-        
-        // For non-Atlassian URLs, prevent navigation and open externally
-        if (!this.isAtlassianUrl(currentUrl) || !this.isAtlassianUrl(navigationUrl)) {
-          event.preventDefault()
-          shell.openExternal(navigationUrl)
-        }
-      })
-    })
   }
 
   private createWindow(): void {
@@ -88,9 +60,9 @@ class JiraApp {
       show: false,
       autoHideMenuBar: false,
       icon: join(__dirname, '../../resources/icon.png'),
+      // Remote content: no preload, no Node, sandboxed and isolated (spec R2)
       webPreferences: {
-        preload: join(__dirname, '../preload/preload.js'),
-        sandbox: false,
+        sandbox: true,
         nodeIntegration: false,
         contextIsolation: true,
         webSecurity: true
@@ -119,25 +91,6 @@ class JiraApp {
 
     // Load Jira directly - just like the original Nativefier approach
     this.mainWindow.loadURL(this.jiraUrl)
-  }
-
-  private isAtlassianUrl(url: string): boolean {
-    try {
-      const parsedUrl = new URL(url)
-      const hostname = parsedUrl.hostname.toLowerCase()
-      
-      // Allow all Atlassian services to stay within the app
-      return (
-        hostname.includes('atlassian.net') ||
-        hostname.includes('atlassian.com') ||
-        hostname.includes('bitbucket.org') ||
-        hostname.includes('trello.com') ||
-        hostname === 'id.atlassian.com' ||
-        url.startsWith(this.jiraUrl)
-      )
-    } catch {
-      return false
-    }
   }
 
   private setupMenu(): void {
@@ -218,24 +171,6 @@ class JiraApp {
 
     const menu = Menu.buildFromTemplate(template)
     Menu.setApplicationMenu(menu)
-  }
-
-  private setupIpcHandlers(): void {
-    ipcMain.handle('get-theme', () => {
-      return nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
-    })
-
-    ipcMain.handle('set-jira-url', (_, url: string) => {
-      this.jiraUrl = url
-      this.loadJiraApp()
-      return true
-    })
-
-    // Handle theme change notifications
-    nativeTheme.on('updated', () => {
-      const theme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
-      this.mainWindow?.webContents.send('theme-changed', theme)
-    })
   }
 
   private async promptForJiraUrl(): Promise<void> {
