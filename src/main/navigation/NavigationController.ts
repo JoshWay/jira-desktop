@@ -1,9 +1,10 @@
 // Browser-parity navigation (spec R4): Back / Forward (menu, Cmd+[ / Cmd+] or Alt+Left / Right,
-// macOS swipe, mouse back/forward via app-command), Copy Current URL, Open in Browser and Find, all
-// acting on a content window: the main window or a WindowManager window, never the dialog, an auth
-// popup or the find bar. Menu actions act on the focused window Electron passes to the click, so
-// the action does nothing when that is not a content window; swipe and app-command act on the
-// window they arrive at. The decisions are in navigationRules.ts (pure); this file wires them.
+// macOS swipe, mouse back/forward via app-command, the right-click menu), Copy Current URL, Open in
+// Browser and Find, all acting on a content window: the main window or a WindowManager window,
+// never the dialog, an auth popup or the find bar. Menu actions act on the focused window Electron
+// passes to the click, so the action does nothing when that is not a content window; swipe,
+// app-command and the right-click menu act on the window they arrive at. The decisions are in
+// navigationRules.ts (pure); this file wires them.
 // codex:run npm test -- tests/unit/navigationRules.test.ts
 // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
 import { BrowserWindow, Menu, app, clipboard } from 'electron'
@@ -21,6 +22,11 @@ export interface NavigationControllerDeps {
   isAllowedInWindow: (url: string) => boolean
   // Opens the find bar on a content window
   openFind: (owner: BrowserWindow) => void
+  // Loads `url` (a history entry Back / Forward chose) in a content window that shows one of the
+  // app's local pages, the way main loads its site: about:blank first. The policy treats a window
+  // showing a local page as confined, so going there straight from history would hand the site's
+  // own redirects to the browser.
+  leaveLocalPage: (win: BrowserWindow, url: string) => void
 }
 
 export class NavigationController {
@@ -81,8 +87,16 @@ export class NavigationController {
     const target = this.target(BrowserWindow.getFocusedWindow())
     for (const [step, id] of [[-1, NAVIGATION_MENU_IDS.back], [1, NAVIGATION_MENU_IDS.forward]] as const) {
       const item = menu.getMenuItemById(id)
-      if (item) item.enabled = target !== null && this.historyIndex(target.webContents, step) !== null
+      if (item) item.enabled = this.canGo(target, step)
     }
+  }
+
+  // Whether Back (step -1) or Forward (step 1) can move `win`: the Go menu's enabled state, and the
+  // context menu's
+  // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+  canGo(win: BaseWindow | null | undefined, step: HistoryStep): boolean {
+    const target = this.target(win)
+    return target !== null && this.historyIndex(target.webContents, step) !== null
   }
 
   // codex:run npm test -- tests/unit/navigationRules.test.ts
@@ -97,12 +111,23 @@ export class NavigationController {
     else if (command === 'forward') this.go(win, 1)
   }
 
+  // Back (step -1) or Forward (step 1) on `win`, if it is a content window that can move that way:
+  // every Back / Forward (Go menu, swipe, app-command, context menu) comes through here. From one of
+  // the app's local pages (the load-error placeholder) the entry is loaded through leaveLocalPage,
+  // not straight from history.
   // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
-  private go(win: BaseWindow | undefined, step: HistoryStep): void {
+  go(win: BaseWindow | null | undefined, step: HistoryStep): void {
     const target = this.target(win)
     if (!target) return
-    const index = this.historyIndex(target.webContents, step)
-    if (index !== null) target.webContents.navigationHistory.goToIndex(index)
+    const contents = target.webContents
+    const index = this.historyIndex(contents, step)
+    if (index === null) return
+    if (this.deps.isLocalPage(contents.getURL())) {
+      const url = contents.navigationHistory.getEntryAtIndex(index)?.url
+      if (url) this.deps.leaveLocalPage(target, url)
+    } else {
+      contents.navigationHistory.goToIndex(index)
+    }
   }
 
   private currentUrl(win: BaseWindow | undefined): string | null {

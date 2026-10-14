@@ -59,11 +59,16 @@ class JiraApp {
       // As for a remote-content window's own navigation, against the site configured now
       // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
       isAllowedInWindow: (url) => decideNavigation(url, false, { siteUrl: this.siteUrl(), isLocalPage: isLocalPageUrl }) === 'allow',
-      openFind: (owner) => this.findBars.open(owner)
+      openFind: (owner) => this.findBars.open(owner),
+      // Back / Forward from the load-error placeholder: as any other site load, about:blank first
+      // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+      leaveLocalPage: (win, url) => this.loadSite(url, win)
     })
     // WindowManager windows are content windows too: Back/Forward, swipe, app-command and Find
     this.windowManager = new WindowManager((window) => this.navigation.attach(window))
-    this.contextMenuService = new ContextMenuService(this.windowManager, () => this.siteUrl())
+    // Its Back / Forward go through the navigation controller, like the Go menu's
+    // codex:run npm test -- tests/unit/ContextMenuService.test.ts
+    this.contextMenuService = new ContextMenuService(this.windowManager, () => this.siteUrl(), this.navigation)
     // Registers the dialog IPC channels once, at startup (spec R2)
     // codex:run npm run test:e2e -- tests/e2e/dialog.spec.ts
     // codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
@@ -268,17 +273,17 @@ class JiraApp {
     this.showPlaceholder(win, () => this.dialogs.showLoadError(failure))
   }
 
-  // Loads a site URL (already validated: the saved site, a dialog result or a load failure's
-  // retryUrl) in the main window. While it shows the placeholder, a local page, the policy treats
-  // it as confined and would hand the site's own redirects to the browser; so it leaves the
-  // placeholder for about:blank first.
+  // Loads a site URL (already validated: the saved site, a dialog result, a load failure's retryUrl
+  // or a history entry Back / Forward chose) in the main window, or in `win`. While it shows the
+  // placeholder, a local page, the policy treats it as confined and would hand the site's own
+  // redirects to the browser; so it leaves the placeholder for about:blank first.
   // A site load that ends with nothing to show for it shows the error view, not a blank (at startup,
   // never shown) window. The policy cancelling the site's redirect (sent to the browser, or refused)
   // does that: no did-fail-load fires and nothing commits; loadURL only rejects.
   // codex:run npm test -- tests/unit/mainWindowRules.test.ts
   // codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
-  private loadSite(url: string): void {
-    const win = this.mainWindow
+  // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+  private loadSite(url: string, win: BrowserWindow | null = this.mainWindow): void {
     if (!win || win.isDestroyed()) return
     const load = (): void => {
       if (win.isDestroyed()) return

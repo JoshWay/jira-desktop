@@ -50,11 +50,14 @@ async function clickMenuIn(app: LaunchedApp, path: string[], windowId: number | 
 }
 
 // Makes BrowserWindow.getFocusedWindow() report `windowId` from now on (the harness never lets a
-// window take real focus), so the menu's enabled state follows that window
+// window take real focus), so the menu's enabled state follows that window. A real focus change
+// also blurs the window that had focus; that event is emitted (not 'browser-window-focus', which
+// the harness counts as a window taking focus) so the menu is refreshed at once.
 async function reportFocused(app: LaunchedApp, windowId: number): Promise<void> {
-  await app.electronApp.evaluate(({ BrowserWindow }, id) => {
+  await app.electronApp.evaluate(({ BrowserWindow, app: electronApp }, id) => {
     const win = BrowserWindow.fromId(id)
     BrowserWindow.getFocusedWindow = () => (win && !win.isDestroyed() ? win : null)
+    electronApp.emit('browser-window-blur', {}, win)
   }, windowId)
 }
 
@@ -75,6 +78,58 @@ async function emitOnWindow(app: LaunchedApp, windowId: number, event: 'swipe' |
   await app.electronApp.evaluate(({ BrowserWindow }, { id, name, arg }) => {
     BrowserWindow.fromId(id)!.emit(name, {}, arg)
   }, { id: windowId, name: event, arg: value })
+}
+
+interface ContextMenuItem { label: string; enabled: boolean; accelerator: string | null }
+
+// Right-clicks the window's page (its 'context-menu' event, as Chromium sends it) and returns the
+// menu ContextMenuService built. The native popup is replaced by a no-op first, so no menu is ever
+// shown and nothing takes focus; with `click`, then clicks that item as the user would (the item's
+// click handler, whether or not it is enabled, as a state change between popup and click could).
+async function contextMenu(app: LaunchedApp, windowId: number, click?: string): Promise<ContextMenuItem[]> {
+  return app.electronApp.evaluate(({ BrowserWindow, Menu }, { id, label }) => {
+    type Recorder = { menus: Electron.Menu[] }
+    const scope = globalThis as unknown as { __contextMenus?: Recorder }
+    if (!scope.__contextMenus) {
+      const recorder: Recorder = { menus: [] }
+      const build = Menu.buildFromTemplate.bind(Menu)
+      Menu.buildFromTemplate = (template) => {
+        const menu = build(template)
+        menu.popup = () => {}
+        recorder.menus.push(menu)
+        return menu
+      }
+      scope.__contextMenus = recorder
+    }
+    const recorder = scope.__contextMenus
+    const win = BrowserWindow.fromId(id)!
+    const before = recorder.menus.length
+    const url = win.webContents.getURL()
+    win.webContents.emit('context-menu', { preventDefault: () => {} }, { x: 1, y: 1, linkURL: '', linkText: '', pageURL: url, isEditable: false, selectionText: '' })
+    if (recorder.menus.length !== before + 1) throw new Error('no context menu was built')
+    const items = recorder.menus.at(-1)!.items
+    if (label !== undefined) {
+      const item = items.find((i) => i.label === label)
+      if (!item) throw new Error(`no context menu item ${label}`)
+      ;(item.click as () => void)()
+    }
+    return items.filter((i) => i.type !== 'separator').map((i) => ({ label: i.label, enabled: i.enabled, accelerator: i.accelerator ?? null }))
+  }, { id: windowId, label: click })
+}
+
+async function contextNav(app: LaunchedApp, windowId: number): Promise<{ back: boolean; forward: boolean }> {
+  const items = await contextMenu(app, windowId)
+  const enabled = (label: string): boolean => {
+    const item = items.find((i) => i.label === label)
+    if (!item) throw new Error(`no context menu item ${label}`)
+    return item.enabled
+  }
+  return { back: enabled('Back'), forward: enabled('Forward') }
+}
+
+async function historyUrls(app: LaunchedApp, windowId: number): Promise<string[]> {
+  return app.electronApp.evaluate(({ BrowserWindow }, id) =>
+    BrowserWindow.fromId(id)!.webContents.navigationHistory.getAllEntries().map((e) => e.url), windowId)
 }
 
 async function findBarPage(app: LaunchedApp): Promise<Page> {
@@ -175,16 +230,64 @@ test('Back never returns to the setup placeholder or the blank page main loads o
     'https://acme.atlassian.net/jira'
   ])
   await expect.poll(() => navEnabled(app)).toEqual({ back: false, forward: false })
+  // The right-click menu's Back / Forward follow the same rules as the Go menu (with its accelerators)
+  // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+  const accelerators = process.platform === 'darwin' ? ['CmdOrCtrl+[', 'CmdOrCtrl+]'] : ['Alt+Left', 'Alt+Right']
+  expect((await contextMenu(app, mainId)).filter((i) => i.label === 'Back' || i.label === 'Forward')).toEqual([
+    { label: 'Back', enabled: false, accelerator: accelerators[0] },
+    { label: 'Forward', enabled: false, accelerator: accelerators[1] }
+  ])
   await clickMenuIn(app, ['Go', 'Back'], mainId)
+  await contextMenu(app, mainId, 'Back')
   await emitOnWindow(app, mainId, 'swipe', 'left')
   await emitOnWindow(app, mainId, 'app-command', 'browser-backward')
+  await expect.poll(() => app.electronApp.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)!.webContents.isLoading(), mainId)).toBe(false)
+  expect(main.url()).toBe('https://acme.atlassian.net/jira')
+  expect(await historyUrls(app, mainId)).toHaveLength(3)
 
   // Still the site, still governed as remote content: an in-app link stays in the window
   await navigate(main, 'https://acme.atlassian.net/browse/A-1')
+  await expect.poll(() => contextNav(app, mainId)).toEqual({ back: true, forward: false })
+  await contextMenu(app, mainId, 'Back')
+  await expect(main).toHaveURL('https://acme.atlassian.net/jira')
+  await expect.poll(() => contextNav(app, mainId)).toEqual({ back: false, forward: true })
+  await contextMenu(app, mainId, 'Forward')
+  await expect(main).toHaveURL('https://acme.atlassian.net/browse/A-1')
   await clickMenuIn(app, ['Go', 'Back'], mainId)
   await expect(main).toHaveURL('https://acme.atlassian.net/jira')
   expect(await app.stubCalls('shell', 'openExternal')).toEqual([])
 })
+
+// Back from the load-error placeholder reaches the failed site's entry. The window still shows a
+// local page then, which the policy treats as confined, so it must leave it the way main's own
+// site load does (about:blank first): otherwise the site's first redirect would go to the browser.
+// codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+for (const via of ['Go menu', 'context menu'] as const) {
+  test(`Back (${via}) from the load-error view loads the site in the app, redirects included`, async ({ launchApp }) => {
+    const app = await launchApp({ routes: [{ url: START_URL, response: { kind: 'network-error' } }] })
+    const main = await app.electronApp.firstWindow()
+    await expect(main).toHaveURL(PLACEHOLDER_PAGE)
+    const mainId = await windowIdOf(app, main)
+    await reportFocused(app, mainId)
+    const dialog = await waitForDialog(app)
+    // The failed load's own (error page) entry, then the placeholder
+    expect(await historyUrls(app, mainId)).toEqual([START_URL, expect.stringMatching(PLACEHOLDER_PAGE)])
+    await expect.poll(() => navEnabled(app)).toEqual({ back: true, forward: false })
+    expect(await contextNav(app, mainId)).toEqual({ back: true, forward: false })
+
+    // The site is back, and redirects as Jira's root does; the user closes the error view and goes Back
+    await app.setRoutes([{ url: START_URL, response: { status: 302, headers: { location: `${START_URL}/your-work` }, body: '' } }])
+    await closeVia(dialog, () => dialog.locator('#cancel').click())
+    if (via === 'Go menu') await clickMenuIn(app, ['Go', 'Back'], mainId)
+    else await contextMenu(app, mainId, 'Back')
+    await expect(main).toHaveURL(`${START_URL}/your-work`)
+    await expect(main).toHaveTitle('E2E stub')
+    expect(await app.stubCalls('shell', 'openExternal')).toEqual([])
+    // Out of the placeholder for good: Back skips it and the blank step
+    await expect.poll(() => navEnabled(app)).toEqual({ back: true, forward: false })
+    expect(await app.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1)
+  })
+}
 
 test('Back / Forward re-check the navigation policy: pages of a site that is no longer configured are out of reach', async ({ launchApp }) => {
   const app = await launchApp({ settings: { jiraUrl: 'https://jira.corp.test/' }, routes: [{ url: 'https://jira.corp.test/*', response: page('Corp') }, ...ROUTES] })
