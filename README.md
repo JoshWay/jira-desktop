@@ -1,251 +1,193 @@
-# Jira Desktop App
+# Jira Desktop
 
-A modern, cross-platform desktop application for Atlassian Jira built with Electron 32+, TypeScript, and Electron Builder.
+A desktop app for Atlassian Jira on macOS, Windows and Linux. It opens your Jira site in its own window, adds browser-style navigation and find, and keeps remote content locked down: Atlassian pages run sandboxed, with no Node.js access, no preload script and no IPC.
 
-## Features
+Built with Electron 44, TypeScript, electron-vite and electron-builder.
 
-- **Modern Technology Stack**: Built with Electron 32+ and TypeScript for reliability and maintainability
-- **Cross-Platform Support**: Native applications for Windows, macOS, and Linux
-- **Security Focused**: Sandboxed renderer process with context isolation and secure preload scripts
-- **Native Dark Mode**: System-aware theme detection with manual toggle support
-- **Auto-Update System**: Built-in update checking and installation capabilities
-- **Native Integration**: System tray, native menus, and keyboard shortcuts
-- **URL Configuration**: Easy Jira instance configuration through native dialogs
+## Install
 
-## Installation
+Download the latest build from [GitHub Releases](https://github.com/JoshWay/jira-desktop/releases/latest). Files are named `Jira-Desktop-<version>-<os>-<arch>.<ext>`.
 
-### Pre-built Releases
+| Platform | Packages | Architectures |
+|----------|----------|---------------|
+| macOS | `.dmg` (install) and `.zip` (used by the updater) | Apple Silicon (`arm64`) and Intel (`x64`) |
+| Windows | NSIS installer (`.exe`) | `x64` |
+| Linux | `.AppImage`, `.deb`, `.rpm` | `x64` |
 
-Download the latest release from [GitHub Releases](https://github.com/JoshWay/jira-desktop/releases/latest):
+- **macOS:** open the `.dmg` and drag Jira Desktop to Applications.
+- **Windows:** run the installer.
+- **Linux:** run the AppImage after `chmod +x`, or install the package (`sudo apt install ./<file>.deb`, `sudo dnf install ./<file>.rpm`).
 
-#### Linux
+Release builds are code-signed and notarized only when the signing credentials were configured for that release (see [Releases](#releases)). If a build is unsigned, macOS blocks it on first launch: allow it under System Settings › Privacy & Security › Open Anyway. Windows SmartScreen asks you to confirm it under More info › Run anyway.
 
-- **AppImage**: `Jira Desktop-2.1.0.AppImage` - Universal portable application
-- **Debian/Ubuntu**: `jira-desktop-app_2.1.0_amd64.deb` - Native package
-- **RPM**: `jira-desktop-app-2.1.0.x86_64.rpm` - For RedHat/Fedora/SUSE
+## First run
 
-#### Windows
+On first launch there is no saved site, so the main window shows a short placeholder and a **Welcome** dialog asks for your Jira address.
 
-- **MSI Installer**: `Jira Desktop-2.1.0.msi` - Windows installer package
+- Enter `your-team.atlassian.net`, a deep link (`your-team.atlassian.net/jira/software/projects/ABC/boards/1`) or a self-hosted site (`https://jira.example.com`, `http://localhost:8080`).
+- `https://` is added when no scheme is given, and Atlassian Cloud hosts always use https. A bare `*.atlassian.net` address opens `/jira`; any other path is kept as entered.
+- Atlassian's own login and marketing pages (`id.atlassian.com`, `atlassian.net`, `www.atlassian.net`) are rejected, as are addresses with a username or password and schemes other than http and https.
+- **Not Now** closes the dialog. Use **Jira Desktop › Set Jira URL…** later.
 
-#### macOS
+The address is saved and opened at every launch. If a page fails to load in the main window, a dialog shows the address that failed, with **Retry** and **Change URL**.
 
-- **Intel Macs**: `Jira Desktop-2.1.0.dmg` - x64 architecture
-- **Apple Silicon**: `Jira Desktop-2.1.0-arm64.dmg` - ARM64 architecture
+Only one copy of the app runs per profile. Launching it again brings the running window forward.
 
-### Installation Instructions
+## Menus and shortcuts
 
-#### Linux Installation
+`Cmd` on macOS, `Ctrl` on Windows and Linux.
+
+| Menu | Item | Shortcut |
+|------|------|----------|
+| Jira Desktop | About | |
+| Jira Desktop | Set Jira URL… | `Cmd/Ctrl+U` |
+| Jira Desktop | Check for Updates… | |
+| Jira Desktop | New Atlassian Window… | `Cmd/Ctrl+Shift+N` |
+| Jira Desktop | Close All Windows (the extra Atlassian windows) | `Cmd/Ctrl+Shift+W` |
+| Jira Desktop | Hide, Hide Others, Show All (macOS) | `Cmd+H`, `Cmd+Option+H`, none |
+| Jira Desktop | Quit (Exit on Windows) | `Cmd/Ctrl+Q` (none on Windows) |
+| Edit | Undo, Redo, Cut, Copy, Paste, Select All | standard |
+| Edit | Find… | `Cmd/Ctrl+F` |
+| View | Reload / Force Reload | `Cmd/Ctrl+R` / `Cmd/Ctrl+Shift+R` |
+| View | Toggle Developer Tools, Actual Size, Zoom In, Zoom Out | standard |
+| View | Appearance › System / Light / Dark | |
+| View | Toggle Full Screen | standard |
+| Go | Back / Forward | `Cmd+[` / `Cmd+]` on macOS, `Alt+Left` / `Alt+Right` elsewhere |
+| Go | Copy Current URL | `Cmd/Ctrl+Shift+C` |
+| Go | Open in Browser | `Cmd/Ctrl+Shift+O` |
+| Window | Minimize, Close | standard |
+
+- **Back / Forward** also work with a three-finger swipe on macOS and with the mouse back/forward buttons on Windows and Linux. They skip the app's own pages and any page the current site settings no longer allow, and are greyed out when there is nowhere to go.
+- **Find** opens a small bar at the top right of the window with a match count. `Enter` goes to the next match, `Shift+Enter` to the previous one, and `Esc` closes the bar. The bar closes when the window loads a new page.
+- **Copy Current URL** and **Open in Browser** act on the page's http(s) address. They do nothing on the app's own pages.
+- **Appearance** sets the color scheme the app reports to pages and its own dialogs. Atlassian sites that follow the system theme follow it too. The choice is saved.
+- **New Atlassian Window** opens an Atlassian address (or a page on your own site) in a separate window, with a product choice (auto-detect, Jira, Confluence, Bitbucket, Trello) and an option to open it in the background. Asking for the same product and page again focuses the window that is already open. These windows share the main window's login and remember their size and position.
+- Right-clicking in the main window offers Copy / Cut / Paste where they apply, **Open … in New Window / in Background** for Atlassian links, and Back, Forward and Reload.
+
+On macOS, closing windows leaves the app running. Clicking the Dock icon opens a new main window only when no app window is open. If an extra Atlassian window is still open, close it first (**Close All Windows**, `Cmd+Shift+W`) and then click the Dock icon, or quit and reopen the app. On Windows and Linux, the app quits when its last window closes.
+
+## How links behave
+
+| Where a link goes | What happens |
+|-------------------|--------------|
+| `https://` Atlassian hosts (`*.atlassian.net`, `*.atlassian.com`, `bitbucket.org`, `trello.com`) or your configured site | Opens in the app. If it asked for a new window, it opens in the window it came from. |
+| A supported sign-in provider (Google, Microsoft, Apple, Okta, OneLogin, Auth0, Duo, Ping Identity) | Allowed in the app. Sign-in popups open as locked-down child windows. |
+| Any other `http`, `https` or `mailto` address | Opens in your default browser or mail app. |
+| Anything else (`file:`, `javascript:`, custom schemes) | Blocked. |
+
+Known limitation: single sign-on through an identity provider that is not on that list, such as a self-hosted ADFS server, opens in your browser instead, so the sign-in does not finish in the app.
+
+## Settings and data
+
+Everything lives in the app's user-data folder. Electron names it after the `name` in `package.json`, `jira-desktop-app`, not after the "Jira Desktop" display name:
+
+| Platform | User-data folder |
+|----------|------------------|
+| macOS | `~/Library/Application Support/jira-desktop-app` |
+| Windows | `%APPDATA%\jira-desktop-app` |
+| Linux | `$XDG_CONFIG_HOME/jira-desktop-app`, which is `~/.config/jira-desktop-app` by default |
+
+
+- `settings.json` stores the Jira address, the Appearance choice, the main window's size, position and maximized state, and any update version you chose to skip.
+- `window-states.json` stores the size and position of extra Atlassian windows.
+- Cookies and the Atlassian login are Electron's normal session storage in the same folder.
+
+Files are written atomically. A file that cannot be parsed is renamed to `<name>.corrupt-<n>` and the app starts with defaults. Saved values are re-validated when they are read, so an edited `settings.json` can never load a `file:` or other non-web address. A saved window position that is no longer on any display falls back to the default size, centered.
+
+Set `JIRA_DESKTOP_USER_DATA_DIR=/some/folder` to run the app against a different profile folder.
+
+The app adds no telemetry of its own. Apart from the sites you open, packaged builds contact GitHub Releases to check for updates.
+
+## Updates
+
+Only packaged builds check for updates. They check once, a few seconds after launch, and again whenever you choose **Check for Updates…**. When a newer version exists, the app asks before downloading anything:
+
+- **Update Now** downloads it in the background, then offers to restart and install.
+- **Remind Me Later** does nothing until the next check.
+- **Skip This Version** silences automatic checks for that version. A manual check still offers it, and any newer version is offered as usual.
+
+Development builds never check. Choosing **Check for Updates…** in one says so.
+
+Update integrity rests on the SHA-512 hashes in the release's `latest*.yml`. On Windows, electron-updater also verifies the installer's Authenticode publisher, but only for builds that were signed.
+
+On macOS, an update installs only when it is signed to match the running app. A release built without the macOS signing credentials therefore publishes no macOS update feed (`latest-mac.yml`). Installed Mac copies get no update offer from it: the automatic check stays silent, and **Check for Updates…** reports that the check failed. Download that release's `.dmg` from GitHub Releases instead.
+
+## Security model
+
+- Every window is sandboxed with context isolation, and `nodeIntegration` is never enabled anywhere.
+- Remote content gets no preload script and no IPC. That covers the main window, extra Atlassian windows and sign-in popups.
+- The app's own pages (the dialog, the find bar and the placeholder) ship with the app and have a strict Content-Security-Policy. The dialog and the find bar each have a minimal preload, and the main process checks every IPC call: it must come from that exact page, in the main frame of the expected window. All text is set with `textContent`, so nothing is ever built as HTML from page or user input.
+- Every navigation, redirect and `window.open` goes through one URL policy, which matches hosts exactly or by dot-anchored suffix, never by substring. Remote content can never navigate to an app page, and a window with a preload can only show app pages.
+- External links go to the OS only as parsed `http`, `https` or `mailto` URLs, through a single code path. `<webview>` is always refused.
+- Permissions are denied except notifications, sanitized clipboard writes and fullscreen, and those only for in-app origins. Device permissions are always denied.
+- The user agent is Chrome's own, without the `Electron/…` and app-name tokens, so Google sign-in accepts it.
+- Packaged builds use the hardened runtime on macOS with only the `allow-jit` and `network.client` entitlements. Electron fuses turn off `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS` and the `--inspect` flags, turn on cookie encryption and asar integrity validation, and load the app only from its asar archive.
+
+## Development
+
+Requires Node.js 22.12 or newer, and npm. The repo uses `package-lock.json`.
 
 ```bash
-# AppImage (Recommended)
-chmod +x "Jira Desktop-2.1.0.AppImage"
-./Jira\ Desktop-2.1.0.AppImage
-
-# Debian/Ubuntu
-sudo dpkg -i jira-desktop-app_2.1.0_amd64.deb
-
-# RPM-based distributions
-sudo rpm -i jira-desktop-app-2.1.0.x86_64.rpm
-```
-
-#### Windows Installation
-
-1. Download `Jira Desktop-2.1.0.msi`
-2. Run the installer as administrator
-3. Launch from Start Menu
-
-#### macOS Installation
-
-1. Download the appropriate DMG for your Mac architecture
-2. Open DMG and drag app to Applications folder
-3. Launch from Applications (may need to right-click → Open on first launch)
-
-## Development Setup
-
-### Prerequisites
-
-- Node.js 18 or higher
-- npm (package-lock.json is used, not yarn)
-
-### Building from Source
-
-```bash
-# Clone the repository
 git clone https://github.com/JoshWay/jira-desktop.git
 cd jira-desktop
+npm ci
 
-# Install dependencies
-npm install
-
-# Development mode
-npm run dev
-
-# Build for production
-npm run build
-
-# Preview production build
-npm run preview
+npm run dev         # run with the electron-vite dev server
+npm run build       # build main, preloads and pages into dist/
+npm run preview     # run the built app
+npm run typecheck   # main/preload (Node types), pages (DOM types), tests
 ```
 
-### Creating Distribution Packages
+`npm run dev` starts at first-run setup unless you have already saved a site. Pair it with `JIRA_DESKTOP_USER_DATA_DIR` to keep a throwaway profile.
+
+### Tests
 
 ```bash
-# Build for current platform only
-npm run dist
-
-# Build for all platforms (requires platform-specific build environments)
-npm run dist:all
-
-# Build directory-only (no installer)
-npm run pack
-
-# Clean build artifacts
-npm run clean
+npm test            # unit tests (vitest)
+npm run test:e2e    # builds, then end-to-end tests (Playwright driving Electron)
 ```
 
-## Configuration
+- **Unit tests** (`tests/unit/`) cover the pure policy and rules modules: URL policy, navigation policy, rate limits, dialog rules, storage, window bounds, updates, user agent, find and navigation rules, and the release tag check.
+- **End-to-end tests** (`tests/e2e/`) launch the real built app. The harness in `tests/e2e/helpers/` keeps every run offline. It answers every http/https request inside the app, sends anything that slips past to a loopback sink that fails the test, and replaces `shell.openExternal`, `shell.openPath` and `dialog.showErrorBox` with recorders. Each launch gets a fresh temporary profile.
+- E2E windows stay off-screen, transparent and unable to take focus, so a run does not take over your screen. A test fails if any window takes focus. For debugging only, `JIRA_DESKTOP_E2E_HEADED=1 npm run test:e2e` shows normal windows and skips the focus check. Never use it for a real gate run.
+- On Linux the e2e tests need a display. CI runs them under `xvfb-run`.
 
-### First Launch Setup
-
-1. Launch the application
-2. Press `Ctrl+U` (Linux/Windows) or `Cmd+U` (macOS) to open URL configuration
-3. Enter your Jira instance URL (e.g., `yourcompany.atlassian.net`)
-4. Click "Set URL" to save and redirect to your Jira login
-
-### Keyboard Shortcuts
-
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+U` / `Cmd+U` | Configure Jira URL |
-| `Ctrl+Shift+D` / `Cmd+Shift+D` | Toggle Dark Mode |
-| `Ctrl+R` / `Cmd+R` | Reload Page |
-| `Ctrl+Shift+I` / `Cmd+Shift+I` | Toggle Developer Tools |
-| `Ctrl+Q` / `Cmd+Q` | Quit Application |
-
-## Architecture
-
-```text
-src/
-├── main/                      # Electron main process
-│   ├── main.ts               # Application entry point
-│   ├── dialogs/              # Set Jira URL / New Atlassian Window dialog (DialogController)
-│   ├── security/             # URL, navigation and local-page IPC policy
-│   └── services/             # Core services
-│       ├── ContextMenuService.ts    # Right-click context menus
-│       ├── StorageService.ts        # Configuration persistence
-│       └── WindowManager.ts         # Window lifecycle management
-├── preload/                   # Per-window preloads for local pages only (never remote content)
-│   └── dialog.ts             # Exposes dialogAPI (getInit / submit / cancel) to the dialog
-├── renderer/                  # Local pages (sandboxed, CSP-restricted)
-│   ├── dialog.html           # The dialog page
-│   ├── dialog.ts
-│   └── dialog.css
-└── shared/                    # Types shared by main, preload and renderer (no electron imports)
-```
-
-## Technical Details
-
-- **Electron Version**: 32.3.3
-- **Build System**: Electron Vite + Electron Builder
-- **Supported Architectures**: x64 (Intel/AMD), ARM64 (Apple Silicon)
-- **Minimum OS Requirements**:
-  - Windows 10 or higher
-  - macOS 10.12 (Sierra) or higher
-  - Linux (most modern distributions)
-
-## Security Features
-
-- **Context Isolation**: Renderer process runs in a sandboxed environment
-- **Preload Security**: Controlled API exposure through secure preload scripts
-- **URL Validation**: Restricts navigation to Atlassian domains and configured URLs
-- **External Link Handling**: Safely opens external links in the default browser
-- **No Direct Node Access**: Renderer process cannot directly access Node.js APIs
-
-## Theme Support
-
-The application includes comprehensive dark mode support:
-
-- **System Detection**: Automatically follows system dark/light mode preferences
-- **Manual Override**: Toggle dark mode independently using keyboard shortcuts or menu
-- **Real-time Updates**: Theme changes apply immediately without restart
-- **Persistent Settings**: Theme preferences are saved and restored between sessions
-
-## Auto-Update System
-
-- **Automatic Checking**: Checks for updates on startup
-- **Manual Checking**: Available through application menu
-- **Background Downloads**: Updates download in the background
-- **User Control**: Users can choose when to install updates
-
-## Troubleshooting
-
-### Common Issues
-
-**Application won't start:**
+## Building packages
 
 ```bash
-npm run clean
-npm install
-npm run build
-npm run preview
+npm run build && npm run dist   # packages for the current platform into release/
+npm run dist:all                # macOS, Windows and Linux (needs a host that can build each)
+npm run pack                    # unpacked app directory only, no installer
+npm run clean                   # remove dist/, out/ and release/
 ```
 
-**"Page Unavailable" on first launch:**
+Signing and notarization are skipped when no credentials are set. electron-builder reads them from the environment: `CSC_LINK` and `CSC_KEY_PASSWORD` (macOS certificate), `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` (notarization), and `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` (Windows certificate).
 
-This is expected behavior. Press `Ctrl+U` (or `Cmd+U` on macOS) to configure your Jira URL.
+## Releases
 
-**macOS "App can't be opened" error:**
+`.github/workflows/release.yml` runs on pushes to `main` and `dev`, on every pull request whatever its base branch, and on `v*` tags.
 
-Right-click the application and select "Open" to bypass Gatekeeper on first launch.
+1. On a `v*` tag, each build first checks that the tag is exactly `v` followed by the `version` in `package.json` (`scripts/release-version.mjs`). If it is not, the build fails before dependencies are installed.
+2. On Ubuntu, Windows and macOS, it runs `npm ci`, the typecheck, the unit tests and the e2e tests, then builds and packages. It uploads the packages, the `latest*.yml` updater metadata and the blockmaps as workflow artifacts.
+3. For a `v*` tag only, a release job publishes those files as a GitHub Release. The release is marked as a pre-release when the version has a semver pre-release part (`2.2.0-rc.1`). Build metadata (`2.2.0+build.5`) does not make it a pre-release.
 
-**Linux AppImage won't run:**
+To release, bump `version` in `package.json` on `dev`, merge to `main`, then tag that commit `v<version>`.
 
-Ensure the file has execute permissions: `chmod +x "Jira Desktop-2.1.0.AppImage"`
-
-### Development Issues
-
-**Build failures:**
-
-- Ensure Node.js 18+ is installed: `node --version`
-- Clear build cache: `npm run clean`
-- Reinstall dependencies: `rm -rf node_modules package-lock.json && npm install`
-
-**Permission errors on Windows:**
-
-Run command prompt as administrator when building or installing.
-
-## Migration from Previous Versions
-
-This version represents a complete modernization from the previous Nativefier-based implementation:
-
-- **Security**: Updated from Electron 10.1.6 to 32.3.3
-- **Build System**: Migrated from Nativefier to Electron Builder with TypeScript
-- **Features**: Added native menus, auto-updates, improved window management
-- **Cross-platform**: Proper multi-platform builds with platform-specific optimizations
-- **Maintainability**: Modern development stack with TypeScript and modular architecture
+- Signing and notarization run only on `v*` tag builds, and only for the platforms whose repository secrets are set: `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` for macOS, `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` for Windows. Branch pushes and pull requests are never signed.
+- Without `MAC_CSC_LINK`, the macOS build is only ad-hoc signed and cannot install as an in-app update. The tag build then drops `latest-mac.yml` and the zip blockmaps and logs a warning. The `.dmg` and `.zip` are still published for manual download (see [Updates](#updates)). The Windows and Linux feeds are published either way.
+- Third-party actions are pinned to commit SHAs, and only the release job has write permission.
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature-name`
-3. Make your changes and test thoroughly
-4. Commit with clear, descriptive messages
-5. Push to your fork and submit a pull request
-
-### Development Guidelines
-
-- Follow TypeScript best practices
-- Maintain security isolation between main and renderer processes
-- Test on multiple platforms when possible
-- Update documentation for any new features or changes
+- Branch from `dev` as `feature/<name>`, or as `hotfix/<name>` from `main` for urgent fixes. Open pull requests into `dev`. `main` only receives merges from `dev` (and hotfixes), and nothing is committed to `main` or `dev` directly.
+- Use [Conventional Commits](https://www.conventionalcommits.org/): `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`.
+- Before opening a PR, make sure `npm run typecheck`, `npm test` and `npm run test:e2e` all pass.
+- Keep the security model above intact. [CLAUDE.md](CLAUDE.md) lists the invariants and the pattern for adding an app page.
 
 ## License
 
-ISC License - See LICENSE file for details.
+[ISC](LICENSE) © 2025 JoshWay
 
 ## Support
 
-- **Issues**: Report bugs and feature requests on [GitHub Issues](https://github.com/JoshWay/jira-desktop/issues)
-- **Documentation**: Additional documentation available in the project wiki
-- **Security**: Report security vulnerabilities privately through GitHub security advisories
+Report bugs and feature requests on [GitHub Issues](https://github.com/JoshWay/jira-desktop/issues). Report security vulnerabilities privately through GitHub security advisories.

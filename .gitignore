@@ -1,31 +1,32 @@
+# Dependencies
 node_modules
-Devnodejsnpm-cache
 
-.tmp
-dump.rdb
+# Build and package output
+dist/
+out/
+release/
 
+# Test output
+test-results/
+playwright-report/
 lib-cov
-*.seed
+
+# Logs and runtime files
 *.log
 *.out
 *.pid
-npm-debug.log
+*.seed
+dump.rdb
+.tmp
 
+# Editors and OS files
 *~
 *#
-.DS_STORE
+.DS_Store
+.idea
 .netbeans
 nbproject
-.idea
 .node_history
 
-dist/*
-out/
-node_modules/
-*.log
-.DS_Store
-dist/
-release/
-test-results/
-playwright-report/
+# Local agent workspace
 .superpowers/
