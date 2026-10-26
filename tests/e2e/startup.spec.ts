@@ -258,7 +258,7 @@ test('main window bounds persist across a relaunch; off-screen bounds fall back 
   const app = await launchApp()
   const page = await mainPage(app)
   await expect(page).toHaveURL(E2E_SITE_URL)
-  // Shown first: the harness parks a window off-screen whenever it is shown
+  // Shown first: the harness parks a window off-screen when it is shown (once; later moves are kept)
   const mainWindow = await app.electronApp.browserWindow(page)
   await expect.poll(() => mainWindow.evaluate((win) => win.isVisible())).toBe(true)
 
