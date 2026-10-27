@@ -177,6 +177,11 @@ describe('normalizeJiraUrl', () => {
     expect(ok('localhost:8080')).toBe('https://localhost:8080/')
     expect(ok('http://localhost:8080/')).toBe('http://localhost:8080/')
   })
+  it('allows a bracketed IPv6 literal host, with or without a scheme', () => {
+    expect(ok('http://[::1]:8080/')).toBe('http://[::1]:8080/')
+    expect(ok('[::1]:8080')).toBe('https://[::1]:8080/')
+    expect(ok('https://[2001:DB8::1]/jira?x=1')).toBe('https://[2001:db8::1]/jira?x=1')
+  })
   it('rejects empty input', () => {
     expect(err('')).toBeTruthy()
     expect(err('   ')).toBeTruthy()
@@ -198,6 +203,8 @@ describe('normalizeJiraUrl', () => {
   it('rejects unparseable input', () => {
     expect(err('https://')).toBeTruthy()
     expect(err('http://exa mple.com')).toBeTruthy()
+    expect(err('https://[::zz]/')).toBeTruthy()
+    expect(err('https://[::1')).toBeTruthy()
   })
 })
 

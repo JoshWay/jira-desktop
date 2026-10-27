@@ -53,6 +53,13 @@ function keepOffScreen(win: BrowserWindow): void {
   win.setIgnoreMouseEvents(true)
 }
 
+// Windows already parked for their first show. Windows and Linux emit 'show' synchronously from
+// show(); macOS emits it from the window's occlusion state, so it arrives after showInactive() has
+// returned, and again whenever a parked window is moved onto a display. Parking on every 'show'
+// undid a move a test made on purpose (startup.spec.ts saves bounds set on the primary display):
+// a window is parked on its first 'show' only, and on every show() call.
+const parkedOnShow = new WeakSet<BrowserWindow>()
+
 function stayOutOfTheWay(): void {
   // Allowed before 'ready' (verified on Electron 44): no Dock icon, no menu bar, no activation
   if (process.platform === 'darwin') app.setActivationPolicy('accessory')
@@ -60,6 +67,7 @@ function stayOutOfTheWay(): void {
   const proto = BrowserWindow.prototype
   proto.show = function (this: BrowserWindow) {
     this.showInactive()
+    parkedOnShow.add(this)
     keepOffScreen(this)
   }
   proto.focus = function () {}
@@ -97,8 +105,17 @@ function stayOutOfTheWay(): void {
     queueMicrotask(() => {
       win.off('move', undoConstructorMove)
       keepOffScreen(win)
+      // Shown natively by the constructor (show: true): parked already, so its 'show' event (still
+      // to come on macOS) has nothing left to do
+      if (win.isVisible()) parkedOnShow.add(win)
     })
-    win.on('show', () => keepOffScreen(win))
+    // Shown some other way (showInactive(), restore(), app.show()): parked once, on the first 'show'
+    // codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
+    win.on('show', () => {
+      if (parkedOnShow.has(win)) return
+      parkedOnShow.add(win)
+      keepOffScreen(win)
+    })
   })
 }
 

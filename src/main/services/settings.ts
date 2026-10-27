@@ -21,6 +21,8 @@ export interface Settings {
   jiraUrl?: string
   themeSource?: ThemeSource
   mainWindow?: MainWindowState
+  // The update version the user chose to skip; automatic checks stay quiet about it (spec R5)
+  skippedVersion?: string
 }
 
 export type SettingsStore = StorageService<Settings>
@@ -37,6 +39,7 @@ export function sanitizeSettings(raw: StorageData): Settings {
   if (!isString(raw.jiraUrl)) delete settings.jiraUrl
   if (!THEME_SOURCES.includes(raw.themeSource as ThemeSource)) delete settings.themeSource
   if (!isMainWindowState(raw.mainWindow)) delete settings.mainWindow
+  if (!isString(raw.skippedVersion) || raw.skippedVersion === '') delete settings.skippedVersion
   return settings as Settings
 }
 
