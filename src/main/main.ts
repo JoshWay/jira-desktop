@@ -177,17 +177,25 @@ class JiraApp {
       this.createWindow()
       this.setupMenu()
       this.updates.startAutomaticChecks()
-      // CI's packaged-app smoke launch (scripts/mac-smoke-launch.sh) waits for this file: it is
-      // written only once startup ran without throwing. A main-process exception shows an error
-      // dialog and leaves the process alive, so "still running" alone would not prove a start.
-      // codex:run npm run test:e2e -- tests/e2e/smoke.spec.ts
-      if (process.env.JIRA_DESKTOP_SMOKE_TEST === '1') writeFileSync(join(app.getPath('userData'), SMOKE_READY_FILE), '')
 
       app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) {
           this.createWindow()
         }
       })
+
+      // CI's packaged-app smoke launch (scripts/mac-smoke-launch.sh) waits for this file: it is
+      // written last, only once startup ran without throwing. A main-process exception shows an
+      // error dialog and leaves the process alive, so "still running" alone would not prove a start.
+      // 'wx' creates a new file and refuses anything already at the path, a symlink included.
+      // codex:run npm run test:e2e -- tests/e2e/smoke.spec.ts
+      if (process.env.JIRA_DESKTOP_SMOKE_TEST === '1') {
+        try {
+          writeFileSync(join(app.getPath('userData'), SMOKE_READY_FILE), '', { flag: 'wx' })
+        } catch (error) {
+          console.error('Failed to write the smoke-test marker:', error)
+        }
+      }
     })
 
     // Quit when all windows are closed

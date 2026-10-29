@@ -89,7 +89,10 @@ ditto "$built" "$target"
 lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 if [ -x "$lsregister" ]; then "$lsregister" -f "$target"; fi
 
-if codesign -dv "$target" 2>&1 | grep -q '^Authority=Developer ID Application'; then
+# Captured first: piping codesign into grep -q under pipefail can fail on SIGPIPE when grep exits
+# at its first match, which would report a signed app as unsigned
+signature=$(codesign -dv "$target" 2>&1 || true)
+if grep -q '^Authority=Developer ID Application' <<<"$signature"; then
   codesign --verify --deep --strict --verbose=2 "$target"
   echo "Installed $target (signed with Developer ID)"
   if [ "$notarize" = true ]; then
