@@ -7,6 +7,10 @@ on:
   # Every pull request, whatever its base: stacked PRs target feature/* branches, and the top of
   # the stack carries the whole change, so it must run the full matrix before anything merges.
   pull_request:
+  # Release rehearsal: run from main (Actions › Build and Release › Run workflow). It builds, signs,
+  # notarizes, smoke-launches and verifies the macOS release exactly as a v* tag would, and
+  # publishes nothing: the release job runs on v* tag pushes only.
+  workflow_dispatch:
 
 # Least privilege: every job reads the repo only. The release job alone may write (spec R5).
 permissions:
@@ -91,44 +95,38 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends rpm
 
-      # Packages only; the release job is the one place that publishes. Signing and notarization
-      # run on release tag builds when their secrets are configured, and never on branch pushes or
-      # pull requests (nothing they build is published).
+      # Packages only; the release job is the one place that publishes. This job runs dependency
+      # install scripts, the test suites and builds from unreviewed pull requests, so it holds no
+      # signing secret at all: every package here is unsigned. The Mac build is used for the smoke
+      # launch and as a PR artifact; the released Mac build comes from package-mac-release below.
+      # Windows releases are unsigned until Windows signing gets a protected job of its own
+      # (CLAUDE.md, "macOS signing setup", Windows).
       - name: Package
         shell: bash
         env:
-          CSC_LINK: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'macOS' && secrets.MAC_CSC_LINK || '' }}
-          CSC_KEY_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
-          APPLE_ID: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'macOS' && secrets.APPLE_ID || '' }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'macOS' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
-          WIN_CSC_LINK: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'Windows' && secrets.WIN_CSC_LINK || '' }}
-          WIN_CSC_KEY_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'Windows' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
+          # Never pick up a signing identity from the runner's keychain
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: |
-          # electron-builder treats an empty CSC_LINK as set (and fails), so drop unset secrets
-          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID WIN_CSC_LINK WIN_CSC_KEY_PASSWORD; do
-            if [ -z "${!name}" ]; then unset "$name"; fi
-          done
-          npx electron-builder --publish never
+          set -euo pipefail
+          # --no: use the electron-builder npm ci installed from the lockfile, never fetch one
+          npx --no -- electron-builder --publish never
 
-      # Squirrel.Mac only installs an update signed to match the running app, so an ad-hoc signed
-      # mac build must not ship an update feed: every in-app "Update Now" would fail. Without
-      # signing, the release keeps the mac .dmg/.zip as manual downloads but drops latest-mac.yml
-      # and the zip blockmaps; mac clients then find no update. Windows and Linux are unaffected.
-      - name: Withhold the macOS update feed (unsigned tag build)
-        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/v')
+      # The only check of the fused, hardened packaged app (scripts/mac-smoke-launch.sh says why).
+      # Launches the native-arch build; macos-latest is arm64 with no Rosetta for the x64 one.
+      - name: Smoke-launch the packaged app (macOS)
+        if: runner.os == 'macOS'
         shell: bash
-        env:
-          MAC_SIGNED: ${{ secrets.MAC_CSC_LINK != '' }}
         run: |
-          if [ "$MAC_SIGNED" = "true" ]; then
-            echo "macOS build is signed; publishing latest-mac.yml"
-            exit 0
-          fi
-          rm -f release/latest-mac.yml release/*.zip.blockmap
-          echo "::warning title=macOS update feed withheld::MAC_CSC_LINK is not configured, so the macOS build is ad-hoc signed and cannot install as an in-app update. latest-mac.yml and the zip blockmaps are not published; mac users must download this release manually."
+          set -euo pipefail
+          case "$(uname -m)" in
+            arm64) app="release/mac-arm64/Jira Desktop.app" ;;
+            *) app="release/mac/Jira Desktop.app" ;;
+          esac
+          scripts/mac-smoke-launch.sh "$app"
 
-      # Installers plus the updater metadata (latest*.yml) and blockmaps for differential updates
+      # Installers plus the updater metadata (latest*.yml) and blockmaps for differential updates.
+      # On v* tags the release job takes Linux and Windows files from here and the Mac files from
+      # package-mac-release, each by its own file patterns (scripts/assemble-release.mjs).
       - name: Upload packages
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -144,21 +142,355 @@ jobs:
             release/latest*.yml
             release/*.blockmap
 
+  # Builds the app's JavaScript (dist/) for the macOS release, on a runner with no secrets. The
+  # bundlers (electron-vite, vite, rollup, esbuild) are third-party code; running them here means
+  # nothing they start can still be alive on the runner that signs (package-mac-release).
+  # Runs for v* tag pushes, and for a rehearsal (workflow_dispatch).
+  build-mac-release:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+    needs: build
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - name: Install dependencies (no install scripts)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload the build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mac-release-dist
+          if-no-files-found: error
+          # Outlives the wait for the release environment's reviewer (and a re-run of the signing job)
+          retention-days: 7
+          path: dist/
+
+  # The released macOS build: v* tag pushes, or a rehearsal (workflow_dispatch from main). A job of
+  # its own so the signing certificate and the notarization key never share a runner with
+  # dependency install scripts, the test suites, the bundlers or pull request code: it installs
+  # with --ignore-scripts, takes dist/ from build-mac-release, then packages, notarizes,
+  # smoke-launches and verifies, nothing else. electron-builder itself necessarily runs here.
+  # Its secrets belong in the `release` environment, which the owner limits to v* tags (and main,
+  # for rehearsals) with a required reviewer, next to a ruleset that lets only the owner create v*
+  # tags (CLAUDE.md, "macOS signing setup"). Those settings, not this file, are the protection:
+  # anyone who can push could edit the checks below on their own commit.
+  package-mac-release:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+    needs: [build, build-mac-release]
+    runs-on: macos-latest
+    timeout-minutes: 90
+    environment: release
+    outputs:
+      signed: ${{ steps.package.outputs.signed }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history, so the commit can be checked against main
+          fetch-depth: 0
+
+      # Releases are tagged on main after dev is merged (CLAUDE.md, Git workflow), and rehearsals
+      # run from main. Catches a tag pushed on the wrong commit by mistake.
+      - name: Check the commit is on main
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error title=Release commit not on main::$GITHUB_REF_NAME ($GITHUB_SHA) is not on origin/main. Release (or rehearse) from a commit on main."
+            exit 1
+          fi
+
+      # No npm cache in the job that holds the signing secrets
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      # --ignore-scripts: no dependency code runs at install time on this runner. electron-builder
+      # downloads Electron itself, so the electron package's own postinstall is not needed. The app
+      # still needs its runtime dependencies (electron-updater) in node_modules to package them.
+      - name: Install dependencies (no install scripts)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Download the build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mac-release-dist
+          path: dist
+
+      # Signed and notarized when MAC_CSC_LINK is set. Without it the build fails, unless the
+      # repository variable MAC_SIGNING_REQUIRED is exactly `false` (an unsigned release on purpose).
+      # forceCodeSigning turns a missing, expired or wrong certificate into a failed build. The
+      # App Store Connect API key is written to a private temp file for this step only. electron-
+      # builder notarizes the apps; the .dmg files are signed (dmg.sign) and notarized here with
+      # notarytool, not stapled: stapling would change the bytes the feed's hashes describe, and
+      # Gatekeeper finds the ticket online. The verify step below is the notarization gate.
+      # Never add `set -x` or DEBUG=electron-builder here: they would print secret material.
+      - name: Package (macOS release)
+        id: package
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          MAC_SIGNING_REQUIRED: ${{ vars.MAC_SIGNING_REQUIRED }}
+        run: |
+          set -euo pipefail
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY_P8 APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            if [ -z "${!name}" ]; then unset "$name"; fi
+          done
+          if [ -z "${CSC_LINK:-}" ]; then
+            if [ "$MAC_SIGNING_REQUIRED" != "false" ]; then
+              echo "::error title=macOS signing required::MAC_CSC_LINK is not set for the release environment. Add the signing secrets (CLAUDE.md, macOS signing setup), or set the repository variable MAC_SIGNING_REQUIRED to false to publish this release unsigned on purpose."
+              exit 1
+            fi
+            echo "::warning title=Unsigned macOS release::MAC_SIGNING_REQUIRED is false and MAC_CSC_LINK is not set; the macOS build is unsigned, its update feed is withheld and the release notes say so"
+            # Nothing secret reaches electron-builder on this path, even if some secrets are set
+            unset CSC_KEY_PASSWORD APPLE_API_KEY_P8 APPLE_API_KEY_ID APPLE_API_ISSUER
+            CSC_IDENTITY_AUTO_DISCOVERY=false ./node_modules/.bin/electron-builder --mac --publish never
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Signing without notarization would ship an app Gatekeeper blocks; fail before building
+          for name in APPLE_API_KEY_P8 APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error title=Notarization key missing::$name is not set for the release environment"
+              exit 1
+            fi
+          done
+          umask 077
+          key="$RUNNER_TEMP/notarize-api-key.p8"
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$key"
+          unset APPLE_API_KEY_P8
+          export APPLE_API_KEY="$key"
+          ./node_modules/.bin/electron-builder --mac --publish never -c.mac.forceCodeSigning=true -c.dmg.sign=true
+          shopt -s nullglob
+          for dmg in release/*.dmg; do
+            echo "Notarizing $dmg"
+            result=$(xcrun notarytool submit "$dmg" --key "$key" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" --wait --timeout 45m --output-format json)
+            status=$(node -e 'process.stdout.write(String(JSON.parse(process.argv[1]).status))' "$result")
+            if [ "$status" != "Accepted" ]; then
+              echo "::error title=DMG notarization::$dmg was not accepted by Apple (status: $status). Run xcrun notarytool log on the submission for details."
+              echo "$result"
+              exit 1
+            fi
+          done
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      # The signed (or unsigned) release build must start too: entitlement or signature problems
+      # under the hardened runtime only show up here. Runs with a stripped environment after the
+      # Package step: its secrets were scoped to that step, the notarization key file is deleted,
+      # and electron-builder deletes its temporary signing keychain when the build finishes. It runs
+      # before the verify step, so anything the launched app could change is checked afterwards.
+      - name: Smoke-launch the release app
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            arm64) app="release/mac-arm64/Jira Desktop.app" ;;
+            *) app="release/mac/Jira Desktop.app" ;;
+          esac
+          scripts/mac-smoke-launch.sh "$app"
+
+      # A signed release must pass Gatekeeper the way a downloaded copy would. This checks what
+      # ships, not the build folder: each .dmg must be signed and notarized, the app inside each
+      # .dmg and each .zip (the updater's file) must have a valid Developer ID signature, be
+      # notarized and carry the stapled ticket, and latest-mac.yml must list exactly those zips.
+      # Gatekeeper assessments are turned on first: a runner may have them off, and then spctl
+      # reports "override=security disabled" instead of the signature's source. Only reads files.
+      - name: Verify the shipped macOS apps (signed release)
+        shell: bash
+        env:
+          MAC_SIGNED: ${{ steps.package.outputs.signed }}
+        run: |
+          set -euo pipefail
+          if [ "$MAC_SIGNED" != "true" ]; then
+            echo "Unsigned release on purpose (MAC_SIGNING_REQUIRED is false): nothing to verify; its update feed is withheld below"
+            exit 0
+          fi
+          gatekeeper=$(spctl --status 2>&1 || true)
+          if [ "$gatekeeper" != "assessments enabled" ]; then
+            echo "Gatekeeper on this runner: $gatekeeper; turning assessments on"
+            sudo spctl --global-enable 2>/dev/null || sudo spctl --master-enable
+            gatekeeper=$(spctl --status 2>&1 || true)
+            if [ "$gatekeeper" != "assessments enabled" ]; then
+              echo "::error title=macOS verification::Gatekeeper assessments could not be turned on ($gatekeeper), so notarization cannot be checked"
+              exit 1
+            fi
+          fi
+          # spctl exits non-zero on a rejection; the exact line pins the source to a notarized
+          # Developer ID signature (Developer ID alone is not enough for a download)
+          assess() {
+            local assessment
+            assessment=$(spctl --assess --verbose=2 "$@" 2>&1)
+            echo "$assessment"
+            grep -qx 'source=Notarized Developer ID' <<<"$assessment"
+          }
+          verify_app() {
+            local app=$1
+            if [ ! -d "$app" ]; then
+              echo "::error title=macOS verification::missing $app"
+              return 1
+            fi
+            echo "== $app"
+            codesign --verify --deep --strict --verbose=2 "$app"
+            assess --type execute "$app"
+            xcrun stapler validate "$app"
+          }
+          shopt -s nullglob
+          dmgs=(release/*.dmg)
+          zips=(release/*.zip)
+          if [ "${#dmgs[@]}" -ne 2 ] || [ "${#zips[@]}" -ne 2 ]; then
+            echo "::error title=macOS verification::expected 2 .dmg and 2 .zip files (x64 and arm64), found ${#dmgs[@]} and ${#zips[@]}"
+            exit 1
+          fi
+          work=$(mktemp -d "$RUNNER_TEMP/verify.XXXXXX")
+          mounts=()
+          cleanup() {
+            local m
+            # ${a[@]+...}: an empty array is "unbound" under set -u in bash 3.2
+            for m in ${mounts[@]+"${mounts[@]}"}; do hdiutil detach -quiet "$m" || hdiutil detach -force -quiet "$m" || true; done
+          }
+          trap cleanup EXIT
+          i=0
+          for dmg in "${dmgs[@]}"; do
+            i=$((i + 1))
+            echo "== $dmg"
+            codesign --verify --strict --verbose=2 "$dmg"
+            assess --type open --context context:primary-signature "$dmg"
+            mnt="$work/dmg-$i"
+            mkdir "$mnt"
+            hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$mnt" "$dmg" >/dev/null
+            mounts+=("$mnt")
+            verify_app "$mnt/Jira Desktop.app"
+          done
+          for zip in "${zips[@]}"; do
+            i=$((i + 1))
+            out="$work/zip-$i"
+            mkdir "$out"
+            ditto -x -k "$zip" "$out"
+            verify_app "$out/Jira Desktop.app"
+          done
+          # The update feed must be for this version (package.json; on a tag, the build job checked
+          # the tag matches it) and list each verified zip with its own SHA-512
+          version=$(node -p "require('./package.json').version")
+          node scripts/release-feed.mjs release/latest-mac.yml "$version" "${zips[@]}"
+
+      # Squirrel.Mac only installs an update signed to match the running app, so an unsigned mac
+      # build must not ship an update feed: every in-app "Update Now" would fail. Without signing,
+      # the release keeps the .dmg/.zip as manual downloads but drops latest-mac.yml and the zip
+      # blockmaps; the app's Check for Updates then offers the releases page (UpdateController).
+      - name: Withhold the macOS update feed (unsigned release)
+        shell: bash
+        env:
+          MAC_SIGNED: ${{ steps.package.outputs.signed }}
+        run: |
+          set -euo pipefail
+          if [ "$MAC_SIGNED" = "true" ]; then
+            echo "macOS build is signed and verified; publishing latest-mac.yml"
+            exit 0
+          fi
+          rm -f release/latest-mac.yml release/*.zip.blockmap
+          echo "::warning title=macOS update feed withheld::the macOS build is unsigned, so it cannot install as an in-app update. latest-mac.yml and the zip blockmaps are not published; mac users must download this release manually."
+
+      - name: Upload packages
+        if: github.event_name != 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-macOS-signed
+          if-no-files-found: error
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/latest-mac.yml
+            release/*.blockmap
+
+      # A rehearsal's signed, notarized packages are only for the owner to inspect: their own
+      # artifact name (the release job never reads it), one day, and no update feed. Their version
+      # can equal a published release's with different bytes, so they must not look like one.
+      - name: Upload rehearsal packages
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rehearsal-macOS
+          if-no-files-found: error
+          retention-days: 1
+          path: |
+            release/*.dmg
+            release/*.zip
+
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, package-mac-release]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: write
 
     steps:
-      - name: Download packages
+      # Only for scripts/assemble-release.mjs, which uses Node's own modules (no install)
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Each platform's files are downloaded apart and taken by that platform's own patterns, so
+      # no leg can add a file for another platform (a latest-mac.yml from the Linux leg, say).
+      # The Mac files come only from package-mac-release, never from the unsigned matrix leg.
+      - name: Download Linux packages
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: release-*
-          path: release
-          merge-multiple: true
+          name: release-Linux
+          path: artifacts/linux
+
+      - name: Download Windows packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-Windows
+          path: artifacts/windows
+
+      - name: Download macOS packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-macOS-signed
+          path: artifacts/mac
+
+      # codex:run npm test -- tests/unit/assembleRelease.test.ts
+      - name: Assemble the release files
+        run: node scripts/assemble-release.mjs artifacts release
+
+      # Only an unsigned-on-purpose Mac build (MAC_SIGNING_REQUIRED=false) gets a notice, so the
+      # README can tell users that any other Gatekeeper warning means "do not open it"
+      - name: Write the release notes
+        shell: bash
+        env:
+          MAC_SIGNED: ${{ needs.package-mac-release.outputs.signed }}
+        run: |
+          set -euo pipefail
+          : > release-notes.md
+          if [ "$MAC_SIGNED" != "true" ]; then
+            cat > release-notes.md <<'NOTES'
+          **macOS: this release's Mac build is unsigned.** It is not signed with a Developer ID or notarized by Apple, so macOS warns the first time it opens. Download it only from this page, then choose System Settings › Privacy & Security › Open Anyway. Installed Mac copies cannot update themselves to this release: download the `.dmg` instead.
+          NOTES
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -176,3 +508,4 @@ jobs:
           draft: false
           # From the semver pre-release part of the checked version (build job), not a ref substring
           prerelease: ${{ needs.build.outputs.prerelease == 'true' }}
+          body_path: release-notes.md

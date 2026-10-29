@@ -1,10 +1,10 @@
 import { app, BrowserWindow, Menu, nativeTheme, dialog, screen } from 'electron'
 import { autoUpdater } from 'electron-updater'
-import { existsSync } from 'fs'
-import { resolve } from 'path'
+import { existsSync, writeFileSync } from 'fs'
+import { join, resolve } from 'path'
 import { WindowManager } from './services/WindowManager'
 import { ContextMenuService } from './services/ContextMenuService'
-import { installWebContentsPolicy, isLocalPageUrl, registerLocalPage } from './security/webContentsPolicy'
+import { installWebContentsPolicy, isLocalPageUrl, openExternalSafely, registerLocalPage } from './security/webContentsPolicy'
 import { decideNavigation, isExpectedLoadAbort } from './security/navigationPolicy'
 import { localPageUrl } from './security/localPageUrl'
 import { DialogController } from './dialogs/DialogController'
@@ -21,6 +21,9 @@ import type { IconLocation } from './services/appIcon'
 import { UpdateController } from './updates/UpdateController'
 
 const DEFAULT_WINDOW_SIZE = Object.freeze({ width: 1200, height: 900 })
+// Written to the profile folder when JIRA_DESKTOP_SMOKE_TEST=1; keep in step with
+// scripts/mac-smoke-launch.sh and tests/e2e/smoke.spec.ts
+const SMOKE_READY_FILE = 'smoke-startup-complete'
 const MIN_WINDOW_SIZE = Object.freeze({ width: 800, height: 600 })
 // The main window is created hidden and normally shown on its first paint; if no load event shows
 // it by then, it is shown anyway, so the app is never running with no window
@@ -111,7 +114,11 @@ class JiraApp {
       showMessageBox: (options) => {
         const parent = this.mainWindow
         return parent && !parent.isDestroyed() ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options)
-      }
+      },
+      platform: process.platform,
+      // The user picked Open Releases Page in a dialog they opened from the menu, so it skips the
+      // page-driven rate limit; the URL is the controller's constant, never page or network input
+      openExternal: (url) => void openExternalSafely(url, { userInitiated: true })
     })
     this.initializeApp()
   }
@@ -176,6 +183,21 @@ class JiraApp {
           this.createWindow()
         }
       })
+
+      // CI's packaged-app smoke launch (scripts/mac-smoke-launch.sh) waits for this file: it is
+      // written last, only once startup ran without throwing. A main-process exception shows an
+      // error dialog and leaves the process alive, so "still running" alone would not prove a start.
+      // It stays on in packaged builds because the packaged app is what it tests; all it can do is
+      // create one empty file in the app's own profile. 'wx' creates a new file and refuses
+      // anything already at the path, a symlink included.
+      // codex:run npm run test:e2e -- tests/e2e/smoke.spec.ts
+      if (process.env.JIRA_DESKTOP_SMOKE_TEST === '1') {
+        try {
+          writeFileSync(join(app.getPath('userData'), SMOKE_READY_FILE), '', { flag: 'wx' })
+        } catch (error) {
+          console.error('Failed to write the smoke-test marker:', error)
+        }
+      }
     })
 
     // Quit when all windows are closed
@@ -438,9 +460,11 @@ class JiraApp {
 }
 
 // Test isolation: JIRA_DESKTOP_USER_DATA_DIR redirects the whole profile (must run before 'ready'
-// and before JiraApp constructs services that read the userData path)
+// and before JiraApp constructs services that read the userData path). Development builds only:
+// a released app always uses its real profile, so nothing outside it (a launch agent's environment,
+// say) can point it at a prepared profile and its saved site.
 // codex:run npm run test:e2e -- tests/e2e/smoke.spec.ts
-const userDataDirOverride = process.env.JIRA_DESKTOP_USER_DATA_DIR
+const userDataDirOverride = app.isPackaged ? undefined : process.env.JIRA_DESKTOP_USER_DATA_DIR
 if (userDataDirOverride) {
   app.setPath('userData', resolve(userDataDirOverride))
 }

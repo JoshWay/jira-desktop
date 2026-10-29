@@ -18,7 +18,17 @@ Download the latest build from [GitHub Releases](https://github.com/JoshWay/jira
 - **Windows:** run the installer.
 - **Linux:** run the AppImage after `chmod +x`, or install the package (`sudo apt install ./<file>.deb`, `sudo dnf install ./<file>.rpm`).
 
-Release builds are code-signed and notarized only when the signing credentials were configured for that release (see [Releases](#releases)). If a build is unsigned, macOS blocks it on first launch: allow it under System Settings › Privacy & Security › Open Anyway. Windows SmartScreen asks you to confirm it under More info › Run anyway.
+macOS releases are signed with a Developer ID certificate and notarized by Apple, so they open with no warning. To check a copy, run this and look for `source=Notarized Developer ID` and the publisher's name on the `origin=` line:
+
+```bash
+spctl --assess --type execute --verbose=2 "/Applications/Jira Desktop.app"
+```
+
+A release can be published with an unsigned Mac build only on purpose, and its release notes then start with "macOS: this release's Mac build is unsigned". For that release only, macOS warns the first time the app opens: download it from the [Releases](https://github.com/JoshWay/jira-desktop/releases) page, try to open it once, then choose System Settings › Privacy & Security › Open Anyway.
+
+If macOS warns about any other release ("cannot be opened" or "cannot be verified"), do not bypass the warning. Delete the copy and [open an issue](https://github.com/JoshWay/jira-desktop/issues).
+
+Windows installers are not code-signed yet, so Windows SmartScreen asks you to confirm the installer under More info › Run anyway.
 
 ## First run
 
@@ -94,7 +104,7 @@ Everything lives in the app's user-data folder. Electron names it after the `nam
 
 Files are written atomically. A file that cannot be parsed is renamed to `<name>.corrupt-<n>` and the app starts with defaults. Saved values are re-validated when they are read, so an edited `settings.json` can never load a `file:` or other non-web address. A saved window position that is no longer on any display falls back to the default size, centered.
 
-Set `JIRA_DESKTOP_USER_DATA_DIR=/some/folder` to run the app against a different profile folder.
+In a development build (`npm run dev`, `npm run preview`), set `JIRA_DESKTOP_USER_DATA_DIR=/some/folder` to run the app against a different profile folder. Released builds ignore it and always use the folder above.
 
 The app adds no telemetry of its own. Apart from the sites you open, packaged builds contact GitHub Releases to check for updates.
 
@@ -110,7 +120,9 @@ Development builds never check. Choosing **Check for Updates…** in one says so
 
 Update integrity rests on the SHA-512 hashes in the release's `latest*.yml`. On Windows, electron-updater also verifies the installer's Authenticode publisher, but only for builds that were signed.
 
-On macOS, an update installs only when it is signed to match the running app. A release built without the macOS signing credentials therefore publishes no macOS update feed (`latest-mac.yml`). Installed Mac copies get no update offer from it: the automatic check stays silent, and **Check for Updates…** reports that the check failed. Download that release's `.dmg` from GitHub Releases instead.
+On macOS, an update installs only when it is signed to match the running app. A release published with an unsigned Mac build therefore has no macOS update feed (`latest-mac.yml`). Installed Mac copies get no update offer from it: the automatic check stays silent, and **Check for Updates…** shows **Update by Download**, with your current version and an **Open Releases Page** button. Download that release's `.dmg` and drag it into Applications, replacing the old copy. The same message appears when a Mac copy that is not signed tries to install an update and macOS refuses it. On Windows and Linux, **Check for Updates…** says the check failed.
+
+Choosing **Check for Updates…** while a check is already running says so instead of doing nothing.
 
 ## Security model
 
@@ -138,7 +150,7 @@ npm run preview     # run the built app
 npm run typecheck   # main/preload (Node types), pages (DOM types), tests
 ```
 
-`npm run dev` starts at first-run setup unless you have already saved a site. Pair it with `JIRA_DESKTOP_USER_DATA_DIR` to keep a throwaway profile.
+`npm run dev` starts at first-run setup unless you have already saved a site. Pair it with `JIRA_DESKTOP_USER_DATA_DIR` to keep a throwaway profile (development builds only).
 
 ### Tests
 
@@ -161,20 +173,25 @@ npm run pack                    # unpacked app directory only, no installer
 npm run clean                   # remove dist/, out/ and release/
 ```
 
-Signing and notarization are skipped when no credentials are set. electron-builder reads them from the environment: `CSC_LINK` and `CSC_KEY_PASSWORD` (macOS certificate), `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` (notarization), and `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` (Windows certificate).
+Signing and notarization are skipped when no credentials are set. electron-builder reads them from the environment: `CSC_LINK` and `CSC_KEY_PASSWORD` (macOS certificate), `APPLE_API_KEY` (path to an App Store Connect `.p8` key), `APPLE_API_KEY_ID` and `APPLE_API_ISSUER` (notarization), and `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` (Windows certificate).
+
+On a Mac with a Developer ID certificate in the login keychain, `scripts/mac-local-install.sh` builds the app for that Mac, signs it, installs it to `~/Applications/Jira Desktop.app` (the same path every time, so macOS keeps the app's permissions) and opens it. Add `--notarize` to notarize as well, with `APPLE_API_KEY`, `APPLE_API_KEY_ID` and `APPLE_API_ISSUER` exported. Releases still come only from CI.
 
 ## Releases
 
 `.github/workflows/release.yml` runs on pushes to `main` and `dev`, on every pull request whatever its base branch, and on `v*` tags.
 
 1. On a `v*` tag, each build first checks that the tag is exactly `v` followed by the `version` in `package.json` (`scripts/release-version.mjs`). If it is not, the build fails before dependencies are installed.
-2. On Ubuntu, Windows and macOS, it runs `npm ci`, the typecheck, the unit tests and the e2e tests, then builds and packages. It uploads the packages, the `latest*.yml` updater metadata and the blockmaps as workflow artifacts.
+2. On Ubuntu, Windows and macOS, it runs `npm ci`, the typecheck, the unit tests and the e2e tests, then builds and packages. On macOS it then launches the packaged app on a throwaway profile and fails unless the app finishes startup and stays running. It uploads the packages, the `latest*.yml` updater metadata and the blockmaps as workflow artifacts.
 3. For a `v*` tag only, a release job publishes those files as a GitHub Release. The release is marked as a pre-release when the version has a semver pre-release part (`2.2.0-rc.1`). Build metadata (`2.2.0+build.5`) does not make it a pre-release.
 
 To release, bump `version` in `package.json` on `dev`, merge to `main`, then tag that commit `v<version>`.
 
-- Signing and notarization run only on `v*` tag builds, and only for the platforms whose repository secrets are set: `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` for macOS, `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` for Windows. Branch pushes and pull requests are never signed.
-- Without `MAC_CSC_LINK`, the macOS build is only ad-hoc signed and cannot install as an in-app update. The tag build then drops `latest-mac.yml` and the zip blockmaps and logs a warning. The `.dmg` and `.zip` are still published for manual download (see [Updates](#updates)). The Windows and Linux feeds are published either way.
+- Only macOS releases are signed. The signing secrets (`MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`) live in the protected `release` environment. Branch pushes and pull requests are never signed. Windows builds stay unsigned until Windows signing has a protected job of its own (see `CLAUDE.md`).
+- The released macOS build comes from its own jobs, which run only for `v*` tags after every test has passed. The app's JavaScript is built on a runner with no secrets. The signing job installs dependencies without running their install scripts, then packages, notarizes, smoke-launches and verifies. Setup is in `CLAUDE.md` under "macOS signing setup".
+- A missing or wrong certificate fails the build. A verify step then fails the release unless each `.dmg` is signed and notarized, the app inside every `.dmg` and `.zip` passes `codesign --verify --deep --strict`, `spctl` reports `Notarized Developer ID`, the app's notarization ticket is stapled, and `latest-mac.yml` lists exactly those zips for this version. So a Mac release is fully signed and notarized, with its update feed.
+- Without the signing secrets, a tag build fails. To publish a release with an unsigned Mac build on purpose, set the repository variable `MAC_SIGNING_REQUIRED` to `false`. That release then has no `latest-mac.yml` or zip blockmaps, its notes say the Mac build is unsigned, and the `.dmg` and `.zip` are published for manual download (see [Updates](#updates)). The Windows and Linux feeds are published either way.
+- To rehearse a release without publishing anything, run the workflow from `main` (Actions › Build and Release › Run workflow). It builds, signs, notarizes, smoke-launches and verifies the Mac release exactly as a tag would, and keeps the packages (without the update feed) as the `rehearsal-macOS` workflow artifact for 1 day.
 - Third-party actions are pinned to commit SHAs, and only the release job has write permission.
 
 ## Contributing
