@@ -83,7 +83,8 @@ src/
     └── find.ts
 
 scripts/
-└── release-version.mjs             # CI tag guard: tag must be v + package.json version; derives prerelease
+├── release-version.mjs             # CI tag guard: tag must be v + package.json version; derives prerelease
+└── mac-local-install.sh            # macOS only: build, sign with the keychain identity, install to ~/Applications
 ```
 
 How it fits together:
@@ -94,12 +95,24 @@ How it fits together:
 - **WindowManager** windows use the default session (they share the main window's login). They are remote content with the same prefs as the main window, and their saved bounds live in `window-states.json`. `NavigationController.attach` is called on each one, so they get Back/Forward and Find.
 - **StorageService** loads synchronously in its constructor and writes atomically (tmp file, fsync, rename). Writes are debounced, and `flush()` runs on `before-quit` and `will-quit`. A corrupt file is renamed to `<file>.corrupt-<n>`. `get` and `set` return JSON copies.
 - **Updates**: `UpdateController` never constructs the updater unless `app.isPackaged`. The feed is the `app-update.yml` that electron-builder generates from `build.publish`. `autoDownload` is false: nothing downloads until the user picks Update Now.
+  - On macOS, a manual check that fails with `ERR_UPDATER_CHANNEL_FILE_NOT_FOUND` (the release has no `latest-mac.yml`) offers **Open Releases Page**, which opens the constant `RELEASES_URL` through `openExternalSafely` with `userInitiated: true`. Only the error `code` is trusted (`isMissingUpdateFeed`); the message carries network data and is never shown or parsed. On other platforms the same error keeps the generic warning.
 - **Packaging** (`package.json` → `build`): fuses (RunAsNode off, NODE_OPTIONS off, CLI inspect off, cookie encryption on, asar integrity on, only-load-from-asar on), the hardened runtime and `build/entitlements.mac.plist` (allow-jit and network.client only). Icons come from `resources/`, copied via `extraResources`.
   - The user-data folder is named after the top-level `package.json` `name` (`jira-desktop-app`); `build.productName` only names the bundle and artifacts. Do not add a top-level `productName` without a profile migration: it would move every user's settings, cookies and login to a new, empty folder.
 - **CI** (`.github/workflows/release.yml`): runs on pushes to `main`/`dev`, on every pull request (any base branch, so stacked PRs get the full matrix) and on `v*` tags. On ubuntu/windows/macos it runs typecheck, unit tests, e2e (under xvfb on Linux), build and package. The `release` job publishes to GitHub Releases on `v*` tags. Actions are pinned to SHAs, with `permissions: contents: read` except on the release job.
   - Tag builds first run `scripts/release-version.mjs`: the tag must be exactly `v` + `package.json` `version`, and the prerelease flag comes from the semver pre-release part, not a substring of the ref.
   - Signing secrets are passed to electron-builder on `v*` tag builds only. Branch pushes and PRs are never signed.
-  - Without `MAC_CSC_LINK` the mac build is ad-hoc signed, which Squirrel.Mac will not install as an update, so the tag build deletes `latest-mac.yml` and the zip blockmaps. Mac users then download releases manually, and a manual update check in the app reports a failed check (electron-updater gets a 404 for the missing feed).
+  - With `MAC_CSC_LINK` set, the macOS tag build passes `-c.mac.forceCodeSigning=true`, so a missing or wrong certificate fails the build. electron-builder 26 only *warns* when notarization credentials are missing, so the "Verify the macOS signature and notarization" step is the notarization gate: both apps must pass `codesign --verify --deep --strict`, `spctl` must report `source=Notarized Developer ID`, and `xcrun stapler validate` must pass. Do not weaken that step.
+  - Without `MAC_CSC_LINK` the mac build is not Developer ID signed, which Squirrel.Mac will not install as an update, so the tag build deletes `latest-mac.yml` and the zip blockmaps. Mac users then download releases manually, and a manual update check in the app offers the releases page (see Updates).
+  - Every macOS run smoke-launches the packaged native-arch app on a throwaway `JIRA_DESKTOP_USER_DATA_DIR` and fails unless it writes its profile and stays running. It is the only check of the fused, hardened packaged app (Playwright cannot drive it: the `--inspect` fuse is off). The step has no secrets in its environment, and electron-builder has deleted its signing keychain by then.
+
+### macOS signing setup (repository secrets)
+
+1. In an Apple Developer Program account, create a **Developer ID Application** certificate. A "Mac Developer" or "Apple Development" certificate is not accepted by Gatekeeper for downloads.
+2. Export it with its private key from Keychain Access as a `.p12` with a strong password. Put `base64 -i cert.p12` into the `MAC_CSC_LINK` secret and the password into `MAC_CSC_KEY_PASSWORD`. Delete the `.p12` file afterwards.
+3. Create an app-specific password at appleid.apple.com for the Apple ID that belongs to the team. Set `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` (the 10-character team ID). All three are required together: electron-builder fails on a partial set.
+4. Secrets are passed only to the Package step of `v*` tag builds on the matching OS. Never add them to a job-level `env`, to a step that runs `npm` scripts, tests or the app, or to any `pull_request` path.
+
+For a signed build on your own Mac, use `scripts/mac-local-install.sh` (signs with the login-keychain identity; `--notarize` notarizes too). It never produces release artifacts.
 
 ## Security invariants (must always hold)
 

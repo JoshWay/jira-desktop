@@ -4,7 +4,7 @@ import { existsSync } from 'fs'
 import { resolve } from 'path'
 import { WindowManager } from './services/WindowManager'
 import { ContextMenuService } from './services/ContextMenuService'
-import { installWebContentsPolicy, isLocalPageUrl, registerLocalPage } from './security/webContentsPolicy'
+import { installWebContentsPolicy, isLocalPageUrl, openExternalSafely, registerLocalPage } from './security/webContentsPolicy'
 import { decideNavigation, isExpectedLoadAbort } from './security/navigationPolicy'
 import { localPageUrl } from './security/localPageUrl'
 import { DialogController } from './dialogs/DialogController'
@@ -111,7 +111,11 @@ class JiraApp {
       showMessageBox: (options) => {
         const parent = this.mainWindow
         return parent && !parent.isDestroyed() ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options)
-      }
+      },
+      platform: process.platform,
+      // The user picked Open Releases Page in a dialog they opened from the menu, so it skips the
+      // page-driven rate limit; the URL is the controller's constant, never page or network input
+      openExternal: (url) => void openExternalSafely(url, { userInitiated: true })
     })
     this.initializeApp()
   }

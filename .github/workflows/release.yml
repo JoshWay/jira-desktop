@@ -104,12 +104,99 @@ jobs:
           APPLE_TEAM_ID: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
           WIN_CSC_LINK: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'Windows' && secrets.WIN_CSC_LINK || '' }}
           WIN_CSC_KEY_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'Windows' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
+          # A tag build that has the macOS certificate must come out signed: forceCodeSigning makes a
+          # missing, expired or wrong certificate fail here instead of shipping an unsigned app.
+          # Notarization is enforced by the verify step below (electron-builder 26 only warns when
+          # the notarization credentials are missing).
+          MAC_FORCE_SIGNING: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'macOS' && secrets.MAC_CSC_LINK != '' }}
         run: |
+          set -euo pipefail
           # electron-builder treats an empty CSC_LINK as set (and fails), so drop unset secrets
           for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID WIN_CSC_LINK WIN_CSC_KEY_PASSWORD; do
             if [ -z "${!name}" ]; then unset "$name"; fi
           done
-          npx electron-builder --publish never
+          args=(--publish never)
+          if [ "$MAC_FORCE_SIGNING" = "true" ]; then args+=(-c.mac.forceCodeSigning=true); fi
+          # --no: use the electron-builder npm ci installed from the lockfile, never fetch one
+          npx --no -- electron-builder "${args[@]}"
+
+      # A signed release must pass Gatekeeper the way a downloaded copy would: a valid Developer ID
+      # signature, notarized, with the ticket stapled. This is the notarization gate. Nothing runs
+      # that a secret could leak through: it only reads the built apps.
+      - name: Verify the macOS signature and notarization (signed tag build)
+        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          MAC_SIGNED: ${{ secrets.MAC_CSC_LINK != '' }}
+        run: |
+          set -euo pipefail
+          if [ "$MAC_SIGNED" != "true" ]; then
+            echo "MAC_CSC_LINK is not configured: the macOS build is unsigned and its update feed is withheld below"
+            exit 0
+          fi
+          shopt -s nullglob
+          apps=(release/mac/*.app release/mac-arm64/*.app)
+          if [ "${#apps[@]}" -ne 2 ]; then
+            echo "::error title=macOS verification::expected the x64 and arm64 apps, found ${#apps[@]}"
+            exit 1
+          fi
+          for app in "${apps[@]}"; do
+            echo "== $app"
+            codesign --verify --deep --strict --verbose=2 "$app"
+            # spctl exits non-zero on rejection; the grep then pins the source to a notarized
+            # Developer ID signature (a plain Developer ID pass is not enough for a download)
+            assessment=$(spctl --assess --type execute --verbose=2 "$app" 2>&1)
+            echo "$assessment"
+            grep -q 'source=Notarized Developer ID' <<<"$assessment"
+            xcrun stapler validate "$app"
+          done
+
+      # The packaged app must start. The fuses (asar integrity, only-load-from-asar) and the hardened
+      # runtime apply only to a packaged build, which the e2e tests never run, and Playwright cannot
+      # drive it (the --inspect fuse is off). So this launches the native-arch app on a throwaway
+      # profile and checks it is still running after Chromium has written that profile. A first run
+      # shows the local welcome dialog and loads no site. The packaged build's automatic update check
+      # reads only GitHub's public releases, and the app stays up whatever it finds. By this step the
+      # signing keychain is gone (electron-builder deletes it when the build finishes) and no secret
+      # is in this step's environment.
+      - name: Smoke-launch the packaged app (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            arm64) dir=release/mac-arm64 ;;
+            *) dir=release/mac ;;
+          esac
+          shopt -s nullglob
+          apps=("$dir"/*.app)
+          if [ "${#apps[@]}" -ne 1 ]; then
+            echo "::error title=Smoke launch::expected one app in $dir, found ${#apps[@]}"
+            exit 1
+          fi
+          bin="${apps[0]}/Contents/MacOS/Jira Desktop"
+          profile=$(mktemp -d "$RUNNER_TEMP/smoke-profile.XXXXXX")
+          log="$RUNNER_TEMP/smoke.log"
+          JIRA_DESKTOP_USER_DATA_DIR="$profile" "$bin" >"$log" 2>&1 &
+          pid=$!
+          started=false
+          for _ in $(seq 1 60); do
+            if ! kill -0 "$pid" 2>/dev/null; then break; fi
+            if [ -f "$profile/Local State" ]; then started=true; break; fi
+            sleep 1
+          done
+          # A few more seconds, so a crash just after startup still fails the step
+          if [ "$started" = true ]; then sleep 5; fi
+          alive=false
+          if kill -0 "$pid" 2>/dev/null; then alive=true; fi
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
+          if [ "$started" != true ] || [ "$alive" != true ]; then
+            echo "::error title=Smoke launch::the packaged app did not stay running (profile written: $started, alive: $alive)"
+            cat "$log"
+            exit 1
+          fi
+          echo "The packaged app started and stayed running"
 
       # Squirrel.Mac only installs an update signed to match the running app, so an ad-hoc signed
       # mac build must not ship an update feed: every in-app "Update Now" would fail. Without
