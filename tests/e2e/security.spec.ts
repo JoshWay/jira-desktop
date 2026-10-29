@@ -50,6 +50,9 @@ async function navigate(app: LaunchedApp, page: Page, url: string): Promise<Navi
 }
 
 async function prefsOf(electronApp: ElectronApplication, url: string) {
+  // Playwright reports a popup once its page has the URL; the main process's webContents.getURL()
+  // can catch up a moment later on a loaded machine, so wait for main to see the window first
+  await expect.poll(() => electronApp.evaluate(({ BrowserWindow }, target) => BrowserWindow.getAllWindows().some((w) => w.webContents.getURL() === target), url)).toBe(true)
   return electronApp.evaluate(({ BrowserWindow, session }, target) => {
     const win = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL() === target)
     if (!win) throw new Error(`no window at ${target}`)
