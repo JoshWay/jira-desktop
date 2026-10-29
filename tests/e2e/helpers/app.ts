@@ -246,7 +246,8 @@ export const test = base.extend<Fixtures>({
     }
     await testInfo.attach('intercepted-requests.json', { body: JSON.stringify(log, null, 2), contentType: 'application/json' })
     await testInfo.attach('window-focus-events.json', { body: JSON.stringify(focusEvents), contentType: 'application/json' })
-    for (const dir of ownedDirs) await rm(dir, { recursive: true, force: true })
+    // Retries: on Windows a Chromium child process can hold a profile file for a moment after quit
+    for (const dir of ownedDirs) await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
     if (process.env.JIRA_DESKTOP_E2E_HEADED !== '1') {
       expect(focusEvents.every((count) => count === 0), `a window took focus (per launch: ${focusEvents})`).toBe(true)
     }
