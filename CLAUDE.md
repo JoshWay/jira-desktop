@@ -84,7 +84,8 @@ src/
 
 scripts/
 ├── release-version.mjs             # CI tag guard: tag must be v + package.json version; derives prerelease
-└── mac-local-install.sh            # macOS only: build, sign with the keychain identity, install to ~/Applications
+├── mac-local-install.sh            # macOS only: build, sign with the keychain identity, install to ~/Applications
+└── mac-smoke-launch.sh             # CI: launch a packaged .app on a throwaway profile, require startup to finish
 ```
 
 How it fits together:
@@ -98,21 +99,39 @@ How it fits together:
   - On macOS, a manual check that fails with `ERR_UPDATER_CHANNEL_FILE_NOT_FOUND` (the release has no `latest-mac.yml`) offers **Open Releases Page**, which opens the constant `RELEASES_URL` through `openExternalSafely` with `userInitiated: true`. Only the error `code` is trusted (`isMissingUpdateFeed`); the message carries network data and is never shown or parsed. On other platforms the same error keeps the generic warning.
 - **Packaging** (`package.json` → `build`): fuses (RunAsNode off, NODE_OPTIONS off, CLI inspect off, cookie encryption on, asar integrity on, only-load-from-asar on), the hardened runtime and `build/entitlements.mac.plist` (allow-jit and network.client only). Icons come from `resources/`, copied via `extraResources`.
   - The user-data folder is named after the top-level `package.json` `name` (`jira-desktop-app`); `build.productName` only names the bundle and artifacts. Do not add a top-level `productName` without a profile migration: it would move every user's settings, cookies and login to a new, empty folder.
-- **CI** (`.github/workflows/release.yml`): runs on pushes to `main`/`dev`, on every pull request (any base branch, so stacked PRs get the full matrix) and on `v*` tags. On ubuntu/windows/macos it runs typecheck, unit tests, e2e (under xvfb on Linux), build and package. The `release` job publishes to GitHub Releases on `v*` tags. Actions are pinned to SHAs, with `permissions: contents: read` except on the release job.
+- **CI** (`.github/workflows/release.yml`): runs on pushes to `main`/`dev`, on every pull request (any base branch, so stacked PRs get the full matrix) and on `v*` tags. On ubuntu/windows/macos it runs typecheck, unit tests, e2e (under xvfb on Linux), build and package. On `v*` tags, `package-mac-release` builds the released Mac app and the `release` job publishes to GitHub Releases. Actions are pinned to SHAs, with `permissions: contents: read` except on the release job.
   - Tag builds first run `scripts/release-version.mjs`: the tag must be exactly `v` + `package.json` `version`, and the prerelease flag comes from the semver pre-release part, not a substring of the ref.
   - Signing secrets are passed to electron-builder on `v*` tag builds only. Branch pushes and PRs are never signed.
-  - With `MAC_CSC_LINK` set, the macOS tag build passes `-c.mac.forceCodeSigning=true`, so a missing or wrong certificate fails the build. electron-builder 26 only *warns* when notarization credentials are missing, so the "Verify the macOS signature and notarization" step is the notarization gate: both apps must pass `codesign --verify --deep --strict`, `spctl` must report `source=Notarized Developer ID`, and `xcrun stapler validate` must pass. Do not weaken that step.
-  - Without `MAC_CSC_LINK` the mac build is not Developer ID signed, which Squirrel.Mac will not install as an update, so the tag build deletes `latest-mac.yml` and the zip blockmaps. Mac users then download releases manually, and a manual update check in the app offers the releases page (see Updates).
-  - Every macOS run smoke-launches the packaged native-arch app on a throwaway `JIRA_DESKTOP_USER_DATA_DIR` and fails unless it writes its profile and stays running. It is the only check of the fused, hardened packaged app (Playwright cannot drive it: the `--inspect` fuse is off). The step has no secrets in its environment, and electron-builder has deleted its signing keychain by then.
+  - The matrix `build` job never holds the macOS secrets. It runs dependency install scripts, the tests and pull request code, so its Mac build is packaged unsigned (`CSC_IDENTITY_AUTO_DISCOVERY=false`) for the smoke launch and as a PR artifact only.
+  - The released Mac build comes from `package-mac-release`: `v*` tag pushes only, after the whole matrix passed, in the `release` environment. It checks the tag is on `origin/main`, installs with `npm ci --ignore-scripts` (electron-builder downloads Electron itself), builds and packages. With `MAC_CSC_LINK` set it passes `-c.mac.forceCodeSigning=true`, so a missing or wrong certificate fails the build. The notarization key is written to a `0600` temp file for that step only and deleted on exit.
+  - electron-builder 26 only *warns* when notarization credentials are missing, so "Verify the shipped macOS apps" is the notarization gate. It mounts each `.dmg` and unpacks each `.zip` (what ships, not the build folder), and the app inside each must pass `codesign --verify --deep --strict`, report exactly `source=Notarized Developer ID` from `spctl`, and pass `xcrun stapler validate`. Do not weaken that step.
+  - Without `MAC_CSC_LINK` the mac build is not Developer ID signed, which Squirrel.Mac will not install as an update, so `package-mac-release` deletes `latest-mac.yml` and the zip blockmaps. Mac users then download releases manually, and a manual update check in the app offers the releases page (see Updates). The repository variable `MAC_SIGNING_REQUIRED=true` turns an unsigned tag build into a failure instead.
+  - Every macOS packaged build (the matrix leg, and the release build after signing) is smoke-launched by `scripts/mac-smoke-launch.sh`: native arch, throwaway profile, stripped environment. With `JIRA_DESKTOP_SMOKE_TEST=1` the app writes `smoke-startup-complete` into its profile once startup ran without throwing (`main.ts`); the script fails unless that file appears and the process is still alive afterwards. It is the only check of the fused, hardened packaged app (Playwright cannot drive it: the `--inspect` fuse is off).
+  - The `release` job downloads each platform's artifact separately and copies only that platform's file patterns (Linux: AppImage/deb/rpm/`latest-linux.yml`; Windows: exe/`latest.yml`; macOS from `package-mac-release` only: dmg/zip/`latest-mac.yml`), and fails if two platforms supply the same file name. No leg can publish another platform's update feed.
+  - Never add `set -x`, `DEBUG=electron-builder` or a job-level `env` with secrets: electron-builder's debug log prints the `.p12` password in `security set-key-partition-list`.
 
-### macOS signing setup (repository secrets)
+### macOS signing setup (owner, once)
 
-1. In an Apple Developer Program account, create a **Developer ID Application** certificate. A "Mac Developer" or "Apple Development" certificate is not accepted by Gatekeeper for downloads.
-2. Export it with its private key from Keychain Access as a `.p12` with a strong password. Put `base64 -i cert.p12` into the `MAC_CSC_LINK` secret and the password into `MAC_CSC_KEY_PASSWORD`. Delete the `.p12` file afterwards.
-3. Create an app-specific password at appleid.apple.com for the Apple ID that belongs to the team. Set `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` (the 10-character team ID). All three are required together: electron-builder fails on a partial set.
-4. Secrets are passed only to the Package step of `v*` tag builds on the matching OS. Never add them to a job-level `env`, to a step that runs `npm` scripts, tests or the app, or to any `pull_request` path.
+The protection comes from these GitHub settings, not from the workflow file: anyone who can push could edit the workflow on their own commit.
 
-For a signed build on your own Mac, use `scripts/mac-local-install.sh` (signs with the login-keychain identity; `--notarize` notarizes too). It never produces release artifacts.
+1. **Certificate.** In the Apple Developer Program, create a **Developer ID Application** certificate (a "Mac Developer" or "Apple Development" one is not accepted by Gatekeeper for downloads). Export it with its private key from Keychain Access as a `.p12` with a strong password.
+2. **Notarization key.** In App Store Connect › Users and Access › Integrations, create a Team API key with the Developer role and download the `.p8` (shown once). Use this, not an Apple ID app-specific password: those also unlock the account's iCloud mail, contacts and calendars.
+3. **Environment.** Repository Settings › Environments › New environment `release`. Under Deployment branches and tags choose "Selected" and add the tag rule `v*` only. Add yourself as a required reviewer.
+4. **Secrets, in that environment** (not repository secrets, which every same-repo pull request can read). Pipe them in so the private key never touches the clipboard, then delete the local files:
+
+   ```bash
+   base64 -i cert.p12 | gh secret set MAC_CSC_LINK --env release
+   gh secret set MAC_CSC_KEY_PASSWORD --env release
+   gh secret set APPLE_API_KEY_P8 --env release < AuthKey_XXXXXXXXXX.p8
+   gh secret set APPLE_API_KEY_ID --env release
+   gh secret set APPLE_API_ISSUER --env release
+   ```
+
+5. **Tag ruleset.** Settings › Rules › Rulesets › New tag ruleset targeting `v*`, restricting creation, update and deletion to you (bypass list), so no one else can start a release.
+6. **Branch protection on `main`** (pull requests and passing checks required), so the "tag is on main" check means "reviewed".
+7. Once signing works, set the repository variable `MAC_SIGNING_REQUIRED` to `true`, so a release can never silently go out unsigned again.
+
+For a signed build on your own Mac, use `scripts/mac-local-install.sh` (signs with the login-keychain identity; `--notarize` notarizes too with an API key). It never produces release artifacts. To open an unsigned build you made yourself (a PR artifact from your own CI run), use System Settings › Privacy & Security › Open Anyway. Never tell users to strip the quarantine attribute.
 
 ## Security invariants (must always hold)
 

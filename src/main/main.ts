@@ -1,7 +1,7 @@
 import { app, BrowserWindow, Menu, nativeTheme, dialog, screen } from 'electron'
 import { autoUpdater } from 'electron-updater'
-import { existsSync } from 'fs'
-import { resolve } from 'path'
+import { existsSync, writeFileSync } from 'fs'
+import { join, resolve } from 'path'
 import { WindowManager } from './services/WindowManager'
 import { ContextMenuService } from './services/ContextMenuService'
 import { installWebContentsPolicy, isLocalPageUrl, openExternalSafely, registerLocalPage } from './security/webContentsPolicy'
@@ -21,6 +21,9 @@ import type { IconLocation } from './services/appIcon'
 import { UpdateController } from './updates/UpdateController'
 
 const DEFAULT_WINDOW_SIZE = Object.freeze({ width: 1200, height: 900 })
+// Written to the profile folder when JIRA_DESKTOP_SMOKE_TEST=1; keep in step with
+// scripts/mac-smoke-launch.sh and tests/e2e/smoke.spec.ts
+const SMOKE_READY_FILE = 'smoke-startup-complete'
 const MIN_WINDOW_SIZE = Object.freeze({ width: 800, height: 600 })
 // The main window is created hidden and normally shown on its first paint; if no load event shows
 // it by then, it is shown anyway, so the app is never running with no window
@@ -174,6 +177,11 @@ class JiraApp {
       this.createWindow()
       this.setupMenu()
       this.updates.startAutomaticChecks()
+      // CI's packaged-app smoke launch (scripts/mac-smoke-launch.sh) waits for this file: it is
+      // written only once startup ran without throwing. A main-process exception shows an error
+      // dialog and leaves the process alive, so "still running" alone would not prove a start.
+      // codex:run npm run test:e2e -- tests/e2e/smoke.spec.ts
+      if (process.env.JIRA_DESKTOP_SMOKE_TEST === '1') writeFileSync(join(app.getPath('userData'), SMOKE_READY_FILE), '')
 
       app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) {

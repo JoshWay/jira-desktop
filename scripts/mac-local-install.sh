@@ -6,8 +6,9 @@
 # Launch Services shows the current icon after a rebuild.
 #
 # Usage: scripts/mac-local-install.sh             build, sign if a certificate is found, install, open
-#        scripts/mac-local-install.sh --notarize  also notarize; needs APPLE_ID,
-#                                                 APPLE_APP_SPECIFIC_PASSWORD and APPLE_TEAM_ID exported
+#        scripts/mac-local-install.sh --notarize  also notarize with an App Store Connect API key:
+#                                                 export APPLE_API_KEY (path to the .p8 file),
+#                                                 APPLE_API_KEY_ID and APPLE_API_ISSUER
 #
 # Release builds come from CI (.github/workflows/release.yml), never from this script.
 set -euo pipefail
@@ -47,9 +48,10 @@ target="$install_dir/$name.app"
 
 builder_args=(--mac dir "--$arch" --publish never)
 if [ "$notarize" = true ]; then
-  for var in APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+  for var in APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER; do
     if [ -z "${!var:-}" ]; then echo "--notarize needs $var exported" >&2; exit 1; fi
   done
+  if [ ! -f "$APPLE_API_KEY" ]; then echo "APPLE_API_KEY must be the path to the .p8 key file" >&2; exit 1; fi
 else
   # Notarization uploads the app to Apple and takes minutes; a local loop skips it
   builder_args+=(-c.mac.notarize=false)
@@ -57,8 +59,11 @@ fi
 
 npm ci --no-audit --no-fund
 npm run build
-# --no: the electron-builder from the lockfile, never a package fetched by npx
-npx --no -- electron-builder "${builder_args[@]}"
+# The electron-builder npm ci installed from the lockfile; never one fetched from the network,
+# since it runs next to the Developer ID key in the login keychain
+builder=./node_modules/.bin/electron-builder
+if [ ! -x "$builder" ]; then echo "electron-builder is missing from node_modules" >&2; exit 1; fi
+"$builder" "${builder_args[@]}"
 
 built="$out/$name.app"
 if [ ! -d "$built" ]; then

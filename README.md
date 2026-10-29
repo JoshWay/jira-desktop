@@ -18,15 +18,13 @@ Download the latest build from [GitHub Releases](https://github.com/JoshWay/jira
 - **Windows:** run the installer.
 - **Linux:** run the AppImage after `chmod +x`, or install the package (`sudo apt install ./<file>.deb`, `sudo dnf install ./<file>.rpm`).
 
-Release builds are code-signed and notarized only when the signing credentials were configured for that release (see [Releases](#releases)). A signed macOS release opens with no warning.
-
-To check a Mac copy before you trust it, run this and look for `source=Notarized Developer ID` and the publisher's name on the `origin=` line:
+macOS releases are signed with a Developer ID certificate and notarized by Apple, so they open with no warning. To check a copy, run this and look for `source=Notarized Developer ID` and the publisher's name on the `origin=` line:
 
 ```bash
 spctl --assess --type execute --verbose=2 "/Applications/Jira Desktop.app"
 ```
 
-If a release is unsigned, macOS blocks it on first launch. Open it only if you downloaded it yourself from this repository's [Releases](https://github.com/JoshWay/jira-desktop/releases) page: try to open it once, then choose System Settings › Privacy & Security › Open Anyway. Do not remove the quarantine attribute with `xattr`: that skips the same check for anything you run that way. Windows SmartScreen asks you to confirm an unsigned installer under More info › Run anyway.
+If macOS warns that a copy downloaded from [Releases](https://github.com/JoshWay/jira-desktop/releases) "cannot be opened" or "cannot be verified", do not bypass the warning. Delete the copy and [open an issue](https://github.com/JoshWay/jira-desktop/issues). Windows SmartScreen asks you to confirm an unsigned installer under More info › Run anyway.
 
 ## First run
 
@@ -169,23 +167,24 @@ npm run pack                    # unpacked app directory only, no installer
 npm run clean                   # remove dist/, out/ and release/
 ```
 
-Signing and notarization are skipped when no credentials are set. electron-builder reads them from the environment: `CSC_LINK` and `CSC_KEY_PASSWORD` (macOS certificate), `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` (notarization), and `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` (Windows certificate).
+Signing and notarization are skipped when no credentials are set. electron-builder reads them from the environment: `CSC_LINK` and `CSC_KEY_PASSWORD` (macOS certificate), `APPLE_API_KEY` (path to an App Store Connect `.p8` key), `APPLE_API_KEY_ID` and `APPLE_API_ISSUER` (notarization), and `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` (Windows certificate).
 
-On a Mac with a Developer ID certificate in the login keychain, `scripts/mac-local-install.sh` builds the app for that Mac, signs it, installs it to `~/Applications/Jira Desktop.app` (the same path every time, so macOS keeps the app's permissions) and opens it. Add `--notarize` to notarize as well, with `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` exported. Releases still come only from CI.
+On a Mac with a Developer ID certificate in the login keychain, `scripts/mac-local-install.sh` builds the app for that Mac, signs it, installs it to `~/Applications/Jira Desktop.app` (the same path every time, so macOS keeps the app's permissions) and opens it. Add `--notarize` to notarize as well, with `APPLE_API_KEY`, `APPLE_API_KEY_ID` and `APPLE_API_ISSUER` exported. Releases still come only from CI.
 
 ## Releases
 
 `.github/workflows/release.yml` runs on pushes to `main` and `dev`, on every pull request whatever its base branch, and on `v*` tags.
 
 1. On a `v*` tag, each build first checks that the tag is exactly `v` followed by the `version` in `package.json` (`scripts/release-version.mjs`). If it is not, the build fails before dependencies are installed.
-2. On Ubuntu, Windows and macOS, it runs `npm ci`, the typecheck, the unit tests and the e2e tests, then builds and packages. On macOS it then launches the packaged app on a throwaway profile and fails if the app does not stay running. It uploads the packages, the `latest*.yml` updater metadata and the blockmaps as workflow artifacts.
+2. On Ubuntu, Windows and macOS, it runs `npm ci`, the typecheck, the unit tests and the e2e tests, then builds and packages. On macOS it then launches the packaged app on a throwaway profile and fails unless the app finishes startup and stays running. It uploads the packages, the `latest*.yml` updater metadata and the blockmaps as workflow artifacts.
 3. For a `v*` tag only, a release job publishes those files as a GitHub Release. The release is marked as a pre-release when the version has a semver pre-release part (`2.2.0-rc.1`). Build metadata (`2.2.0+build.5`) does not make it a pre-release.
 
 To release, bump `version` in `package.json` on `dev`, merge to `main`, then tag that commit `v<version>`.
 
-- Signing and notarization run only on `v*` tag builds, and only for the platforms whose repository secrets are set: `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` for macOS, `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` for Windows. Branch pushes and pull requests are never signed.
-- With `MAC_CSC_LINK` set, a macOS tag build must come out signed (a missing or wrong certificate fails the build), and a verify step fails the release unless both apps pass `codesign --verify --deep --strict`, `spctl` reports `Notarized Developer ID`, and the notarization ticket is stapled. So a Mac release is either fully signed and notarized, with its update feed, or unsigned without one.
-- Without `MAC_CSC_LINK`, the macOS build is not signed with a Developer ID and cannot install as an in-app update. The tag build then drops `latest-mac.yml` and the zip blockmaps and logs a warning. The `.dmg` and `.zip` are still published for manual download (see [Updates](#updates)). The Windows and Linux feeds are published either way.
+- Signing and notarization run only on `v*` tag builds, and only for the platforms whose secrets are set: `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID` and `APPLE_API_ISSUER` for macOS (in the `release` environment), `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` for Windows. Branch pushes and pull requests are never signed.
+- The released macOS build comes from its own job, `package-mac-release`, which runs only for `v*` tags after every test has passed. It installs dependencies without running their install scripts, and its secrets live in the protected `release` environment. Setup is in `CLAUDE.md` under "macOS signing setup".
+- With `MAC_CSC_LINK` set, a missing or wrong certificate fails the build. A verify step then fails the release unless the app inside every `.dmg` and `.zip` passes `codesign --verify --deep --strict`, `spctl` reports `Notarized Developer ID`, and the notarization ticket is stapled. So a Mac release is either fully signed and notarized, with its update feed, or unsigned without one.
+- Without `MAC_CSC_LINK`, the macOS build is not signed with a Developer ID and cannot install as an in-app update. Set the repository variable `MAC_SIGNING_REQUIRED` to `true` to make such a tag build fail instead. The tag build then drops `latest-mac.yml` and the zip blockmaps and logs a warning. The `.dmg` and `.zip` are still published for manual download (see [Updates](#updates)). The Windows and Linux feeds are published either way.
 - Third-party actions are pinned to commit SHAs, and only the release job has write permission.
 
 ## Contributing
