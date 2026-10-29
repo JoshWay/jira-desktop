@@ -174,7 +174,8 @@ jobs:
         with:
           name: mac-release-dist
           if-no-files-found: error
-          retention-days: 1
+          # Outlives the wait for the release environment's reviewer (and a re-run of the signing job)
+          retention-days: 7
           path: dist/
 
   # The released macOS build, on v* tag pushes only. A job of its own so the signing certificate
@@ -355,11 +356,18 @@ jobs:
             echo "::error title=macOS verification::$feed is not for version ${GITHUB_REF_NAME#v}"
             exit 1
           fi
+          # Each files entry as "url sha512", so a zip is matched with its own hash, not any hash
+          pairs=$(awk '/^  - url: /{u=$3} /^    sha512: /{if (u != "") print u, $2; u=""}' "$feed")
+          feed_zips=$(grep -c '^  - url: .*\.zip$' "$feed" || true)
+          if [ "$feed_zips" -ne "${#zips[@]}" ]; then
+            echo "::error title=macOS verification::$feed lists $feed_zips zip files, expected ${#zips[@]}"
+            exit 1
+          fi
           for zip in "${zips[@]}"; do
             hash=$(openssl dgst -sha512 -binary "$zip" | base64 | tr -d '\n')
             name=$(basename "$zip")
-            if ! grep -qF "url: $name" "$feed" || ! grep -qF "sha512: $hash" "$feed"; then
-              echo "::error title=macOS verification::$feed does not list $name with its SHA-512"
+            if ! grep -qxF "$name $hash" <<<"$pairs"; then
+              echo "::error title=macOS verification::$feed does not list $name with its own SHA-512"
               exit 1
             fi
           done
