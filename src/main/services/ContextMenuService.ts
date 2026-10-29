@@ -1,6 +1,8 @@
 import { BrowserWindow, Menu, MenuItem } from 'electron'
 import { WindowManager, WindowConfig } from './WindowManager'
 import { isInAppUrl } from '../security/urlPolicy'
+import { navigationAccelerators } from '../navigation/navigationRules'
+import type { HistoryStep } from '../navigation/navigationRules'
 
 export interface ContextMenuParams {
   x: number
@@ -12,14 +14,24 @@ export interface ContextMenuParams {
   selectionText: string
 }
 
+// Back / Forward as NavigationController does them for the Go menu: the same history rules (never
+// the placeholder or the about:blank step, re-checked against the policy) and the same way off a
+// local page
+export interface ContextMenuNavigation {
+  canGo(win: BrowserWindow, step: HistoryStep): boolean
+  go(win: BrowserWindow, step: HistoryStep): void
+}
+
 export class ContextMenuService {
   private windowManager: WindowManager
   private getConfiguredSiteUrl: () => string | undefined
+  private navigation: ContextMenuNavigation
 
   // getConfiguredSiteUrl: the same getter the webContents policy uses, so the user's own site counts as in-app
-  constructor(windowManager: WindowManager, getConfiguredSiteUrl: () => string | undefined) {
+  constructor(windowManager: WindowManager, getConfiguredSiteUrl: () => string | undefined, navigation: ContextMenuNavigation) {
     this.windowManager = windowManager
     this.getConfiguredSiteUrl = getConfiguredSiteUrl
+    this.navigation = navigation
   }
 
   public setupForWindow(window: BrowserWindow): void {
@@ -117,25 +129,26 @@ export class ContextMenuService {
       menuItems.push(new MenuItem({ type: 'separator' }))
     }
 
+    // Through the navigation controller, never webContents.goBack() / goForward(): those would
+    // walk onto the placeholder and the about:blank step, and skip the policy re-check
+    // codex:run npm test -- tests/unit/ContextMenuService.test.ts
+    // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+    const accelerators = navigationAccelerators(process.platform)
     menuItems.push(
       new MenuItem({
         label: 'Back',
-        accelerator: 'Alt+Left',
-        enabled: window.webContents.canGoBack(),
-        click: () => {
-          window.webContents.goBack()
-        }
+        accelerator: accelerators.back,
+        enabled: this.navigation.canGo(window, -1),
+        click: () => this.navigation.go(window, -1)
       })
     )
 
     menuItems.push(
       new MenuItem({
         label: 'Forward',
-        accelerator: 'Alt+Right',
-        enabled: window.webContents.canGoForward(),
-        click: () => {
-          window.webContents.goForward()
-        }
+        accelerator: accelerators.forward,
+        enabled: this.navigation.canGo(window, 1),
+        click: () => this.navigation.go(window, 1)
       })
     )
 

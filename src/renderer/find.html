@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Find in Page</title>
+  <link rel="stylesheet" href="./find.css">
+  <script type="module" src="./find.ts"></script>
+</head>
+<body>
+  <!-- The count is set by find.ts with textContent, never as markup -->
+  <form id="find-form" role="search" novalidate>
+    <input id="query" type="text" aria-label="Find in page" placeholder="Find in page" autocomplete="off" spellcheck="false" maxlength="1000" autofocus>
+    <span id="count" aria-live="polite"></span>
+    <button id="previous" type="button" title="Previous match (Shift+Enter)" aria-label="Previous match">&#8593;</button>
+    <button id="next" type="button" title="Next match (Enter)" aria-label="Next match">&#8595;</button>
+    <button id="close" type="button" title="Close (Esc)" aria-label="Close find bar">&#10005;</button>
+  </form>
+</body>
+</html>

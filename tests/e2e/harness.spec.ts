@@ -1,20 +1,24 @@
 // Proves the e2e harness itself works, so later specs can trust it.
-import { expect, test } from './helpers/app'
+import { E2E_SITE_URL, expect, test } from './helpers/app'
 
 test('serves configured routes and forced network errors', async ({ launchApp }) => {
   const app = await launchApp({
-    routes: [{ url: 'https://id.atlassian.com/*', response: { body: '<title>Configured login</title>' } }]
+    routes: [{ url: 'https://e2e.atlassian.net/*', response: { body: '<title>Configured login</title>' } }]
   })
   const page = await app.electronApp.firstWindow()
   await expect(page).toHaveTitle('Configured login')
 
   await app.setRoutes([{ url: 'https://broken.atlassian.net/', response: { kind: 'network-error' } }])
+  // In a window of its own: the app's main window answers a failed load with its error view
   const loadError = await app.electronApp.evaluate(async ({ BrowserWindow }) => {
+    const win = new BrowserWindow({ show: false })
     try {
-      await BrowserWindow.getAllWindows()[0].loadURL('https://broken.atlassian.net/')
+      await win.loadURL('https://broken.atlassian.net/')
       return null
     } catch (error) {
       return (error as Error).message
+    } finally {
+      win.destroy()
     }
   })
   expect(loadError).toContain('ERR_FAILED')
@@ -75,7 +79,7 @@ test('replaces OS hand-offs and blocking dialogs with recorders by default', asy
 test('refuses and records Chromium\'s own OS protocol hand-off, whatever handler the app sets', async ({ launchApp }) => {
   const app = await launchApp()
   const page = await app.electronApp.firstWindow()
-  await expect(page).toHaveURL('https://id.atlassian.com/login')
+  await expect(page).toHaveURL(E2E_SITE_URL)
   // Simulate a broken app: no navigation guard, and a permission handler that grants everything.
   // The probe scheme is unregistered, so even a harness failure here opens nothing.
   await app.electronApp.evaluate(({ BrowserWindow, session }) => {
@@ -85,7 +89,7 @@ test('refuses and records Chromium\'s own OS protocol hand-off, whatever handler
   await page.evaluate(() => { window.location.href = 'jira-desktop-e2e-probe://x/y' })
   // Recorded with the app handler's verdict (granted), and refused regardless
   await expect.poll(() => app.stubCalls('permission', 'openExternal')).toEqual([['jira-desktop-e2e-probe://x/y', true]])
-  expect(page.url()).toBe('https://id.atlassian.com/login')
+  expect(page.url()).toBe(E2E_SITE_URL)
   // Other permissions still reach the app's handler
   expect(await page.evaluate(() => Notification.requestPermission())).toBe('granted')
 })
@@ -188,7 +192,7 @@ test('windows shown at construction, and window.open children, can never take fo
   test.skip(process.env.JIRA_DESKTOP_E2E_HEADED === '1', 'headed runs show real windows')
   const app = await launchApp()
   const page = await app.electronApp.firstWindow()
-  await expect(page).toHaveURL('https://id.atlassian.com/login')
+  await expect(page).toHaveURL(E2E_SITE_URL)
 
   // The native show of a default show: true window happens after browser-window-created, and
   // center: true is applied after it too; with another app frontmost that show used to make the

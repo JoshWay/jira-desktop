@@ -16,6 +16,11 @@ export function registerLocalPage(url: string): void {
   localPages.register(url)
 }
 
+// True for a URL of a registered local page (same matching the navigation policy uses)
+export function isLocalPageUrl(url: string): boolean {
+  return localPages.matches(url)
+}
+
 // Remote content can call window.open or navigate in a loop with no user gesture (Electron has no
 // popup blocker), and every external open is a browser tab or a mail compose window. One app-wide
 // budget, whoever asks: a short burst, then about one a second; the rest are dropped and logged.
@@ -25,13 +30,14 @@ const externalOpens = new TokenBucket({ burst: EXTERNAL_OPEN_BURST, refillPerSec
 const externalDrops = new DropLog('openExternal rate limit')
 
 // The only path to shell.openExternal: http/https/mailto, and the parsed href, never the raw string.
-// False when the URL is refused or the open was dropped by the rate limit.
+// False when the URL is refused or the open was dropped by the rate limit. The rate limit is for
+// page-driven opens only: a user's own menu action never draws from (or is refused by) the bucket.
 // codex:run npm test -- tests/unit/navigationPolicy.test.ts tests/unit/rateLimit.test.ts
-// codex:run npm run test:e2e -- tests/e2e/security.spec.ts
-export function openExternalSafely(url: string): boolean {
+// codex:run npm run test:e2e -- tests/e2e/security.spec.ts tests/e2e/navigation.spec.ts
+export function openExternalSafely(url: string, { userInitiated = false }: { userInitiated?: boolean } = {}): boolean {
   const href = toExternalHref(url)
   if (!href) return false
-  if (!externalOpens.tryTake()) {
+  if (!userInitiated && !externalOpens.tryTake()) {
     externalDrops.drop(href)
     return false
   }
