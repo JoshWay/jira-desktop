@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Launches a packaged Jira Desktop .app on a throwaway profile and fails unless it finishes startup
-# and keeps running. Used by CI (.github/workflows/release.yml) on every macOS run, signed or not.
+# Launches a packaged Jira Desktop .app on a fresh profile and fails unless it finishes startup and
+# keeps running. Used by CI (.github/workflows/release.yml) on every macOS run, signed or not.
 #
 # Usage: scripts/mac-smoke-launch.sh "<path to Jira Desktop.app>"
 #
@@ -10,9 +10,13 @@
 # startup ran without throwing (src/main/main.ts). Being alive is not enough on its own: a
 # main-process exception shows an error dialog and leaves the process running.
 #
-# The app runs with a stripped environment (no CI tokens or secrets), on a new empty profile, so
-# it shows the local welcome dialog and loads no site. A packaged build checks GitHub's public
-# releases for updates a few seconds in; it keeps running whatever that check finds.
+# A packaged app always uses its real profile (JIRA_DESKTOP_USER_DATA_DIR is honoured only in
+# development builds), so this needs a machine where that profile does not exist yet: a fresh CI
+# runner. Outside CI it refuses to run rather than touch someone's real profile.
+#
+# The app runs with a stripped environment (no CI tokens or secrets) and shows the local welcome
+# dialog, so it loads no site. A packaged build checks GitHub's public releases for updates a few
+# seconds in; it keeps running whatever that check finds.
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
@@ -26,14 +30,29 @@ if [ ! -x "$bin" ]; then
   exit 1
 fi
 
-work=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/jira-desktop-smoke.XXXXXX")
-profile="$work/profile"
-log="$work/app.log"
-mkdir "$profile"
+# The userData folder is named after package.json "name" (see CLAUDE.md, Packaging).
+# SMOKE_PROFILE_DIR only exists so the script can be exercised on Linux (~/.config/...).
+profile="${SMOKE_PROFILE_DIR:-$HOME/Library/Application Support/jira-desktop-app}"
+if [ -e "$profile" ]; then
+  if [ "${CI:-}" != "true" ]; then
+    echo "A Jira Desktop profile already exists at $profile; refusing to launch against it outside CI" >&2
+    exit 1
+  fi
+  # A CI runner is thrown away after the job; start from an empty profile
+  rm -rf -- "$profile"
+fi
 marker="$profile/smoke-startup-complete"
 
+# For the record: whether Gatekeeper assessments are on for this runner
+if command -v spctl >/dev/null 2>&1; then
+  echo "Gatekeeper on this machine: $(spctl --status 2>&1 || true)"
+fi
+
+work=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/jira-desktop-smoke.XXXXXX")
+log="$work/app.log"
+
 env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin TMPDIR="${TMPDIR:-/tmp}" \
-  JIRA_DESKTOP_USER_DATA_DIR="$profile" JIRA_DESKTOP_SMOKE_TEST=1 \
+  JIRA_DESKTOP_SMOKE_TEST=1 \
   "$bin" >"$log" 2>&1 &
 pid=$!
 
@@ -47,7 +66,14 @@ done
 if [ "$started" = true ]; then sleep 5; fi
 alive=false
 if kill -0 "$pid" 2>/dev/null; then alive=true; fi
+
+# Stop it, and never wait on a process that ignores SIGTERM
 kill "$pid" 2>/dev/null || true
+for _ in $(seq 1 10); do
+  if ! kill -0 "$pid" 2>/dev/null; then break; fi
+  sleep 1
+done
+kill -9 "$pid" 2>/dev/null || true
 wait "$pid" 2>/dev/null || true
 
 if [ "$started" != true ] || [ "$alive" != true ]; then

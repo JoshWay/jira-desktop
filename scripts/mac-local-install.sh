@@ -57,7 +57,9 @@ else
   builder_args+=(-c.mac.notarize=false)
 fi
 
-npm ci --no-audit --no-fund
+# --ignore-scripts: no dependency install script runs while this Mac's Developer ID key is in the
+# login keychain. electron-builder downloads Electron itself, so packaging does not need them.
+npm ci --ignore-scripts --no-audit --no-fund
 npm run build
 # The electron-builder npm ci installed from the lockfile; never one fetched from the network,
 # since it runs next to the Developer ID key in the login keychain
@@ -104,3 +106,7 @@ else
 fi
 
 open "$target"
+
+# npm run dev and the e2e tests need the Electron binary that the electron package's own install
+# script downloads; restore just that one, now that packaging is done
+node node_modules/electron/install.js

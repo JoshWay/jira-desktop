@@ -24,7 +24,11 @@ macOS releases are signed with a Developer ID certificate and notarized by Apple
 spctl --assess --type execute --verbose=2 "/Applications/Jira Desktop.app"
 ```
 
-If macOS warns that a copy downloaded from [Releases](https://github.com/JoshWay/jira-desktop/releases) "cannot be opened" or "cannot be verified", do not bypass the warning. Delete the copy and [open an issue](https://github.com/JoshWay/jira-desktop/issues). Windows SmartScreen asks you to confirm an unsigned installer under More info › Run anyway.
+A release can be published with an unsigned Mac build only on purpose, and its release notes then start with "macOS: this release's Mac build is unsigned". For that release only, macOS warns the first time the app opens: download it from the [Releases](https://github.com/JoshWay/jira-desktop/releases) page, try to open it once, then choose System Settings › Privacy & Security › Open Anyway.
+
+If macOS warns about any other release ("cannot be opened" or "cannot be verified"), do not bypass the warning. Delete the copy and [open an issue](https://github.com/JoshWay/jira-desktop/issues).
+
+Windows installers are not code-signed yet, so Windows SmartScreen asks you to confirm the installer under More info › Run anyway.
 
 ## First run
 
@@ -100,7 +104,7 @@ Everything lives in the app's user-data folder. Electron names it after the `nam
 
 Files are written atomically. A file that cannot be parsed is renamed to `<name>.corrupt-<n>` and the app starts with defaults. Saved values are re-validated when they are read, so an edited `settings.json` can never load a `file:` or other non-web address. A saved window position that is no longer on any display falls back to the default size, centered.
 
-Set `JIRA_DESKTOP_USER_DATA_DIR=/some/folder` to run the app against a different profile folder.
+In a development build (`npm run dev`, `npm run preview`), set `JIRA_DESKTOP_USER_DATA_DIR=/some/folder` to run the app against a different profile folder. Released builds ignore it and always use the folder above.
 
 The app adds no telemetry of its own. Apart from the sites you open, packaged builds contact GitHub Releases to check for updates.
 
@@ -116,7 +120,9 @@ Development builds never check. Choosing **Check for Updates…** in one says so
 
 Update integrity rests on the SHA-512 hashes in the release's `latest*.yml`. On Windows, electron-updater also verifies the installer's Authenticode publisher, but only for builds that were signed.
 
-On macOS, an update installs only when it is signed to match the running app. A release built without the macOS signing credentials therefore publishes no macOS update feed (`latest-mac.yml`). Installed Mac copies get no update offer from it: the automatic check stays silent, and **Check for Updates…** says that this build cannot update itself, with an **Open Releases Page** button. Download that release's `.dmg` from GitHub Releases instead. On Windows and Linux a missing feed is a broken release, and **Check for Updates…** reports that the check failed.
+On macOS, an update installs only when it is signed to match the running app. A release published with an unsigned Mac build therefore has no macOS update feed (`latest-mac.yml`). Installed Mac copies get no update offer from it: the automatic check stays silent, and **Check for Updates…** shows **Update by Download**, with your current version and an **Open Releases Page** button. Download that release's `.dmg` and drag it into Applications, replacing the old copy. The same message appears when a Mac copy that is not signed tries to install an update and macOS refuses it. On Windows and Linux, **Check for Updates…** says the check failed.
+
+Choosing **Check for Updates…** while a check is already running says so instead of doing nothing.
 
 ## Security model
 
@@ -144,7 +150,7 @@ npm run preview     # run the built app
 npm run typecheck   # main/preload (Node types), pages (DOM types), tests
 ```
 
-`npm run dev` starts at first-run setup unless you have already saved a site. Pair it with `JIRA_DESKTOP_USER_DATA_DIR` to keep a throwaway profile.
+`npm run dev` starts at first-run setup unless you have already saved a site. Pair it with `JIRA_DESKTOP_USER_DATA_DIR` to keep a throwaway profile (development builds only).
 
 ### Tests
 
@@ -181,10 +187,11 @@ On a Mac with a Developer ID certificate in the login keychain, `scripts/mac-loc
 
 To release, bump `version` in `package.json` on `dev`, merge to `main`, then tag that commit `v<version>`.
 
-- Signing and notarization run only on `v*` tag builds, and only for the platforms whose secrets are set: `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID` and `APPLE_API_ISSUER` for macOS (in the `release` environment), `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` for Windows. Branch pushes and pull requests are never signed. Do not create the Windows secrets until Windows signing moves into its own protected job (see `CLAUDE.md`).
-- The released macOS build comes from its own jobs, which run only for `v*` tags after every test has passed. The app's JavaScript is built on a runner with no secrets; the signing job installs dependencies without running their install scripts and only packages, smoke-launches and verifies. Its secrets live in the protected `release` environment. Setup is in `CLAUDE.md` under "macOS signing setup".
-- With `MAC_CSC_LINK` set, a missing or wrong certificate fails the build. A verify step then fails the release unless the app inside every `.dmg` and `.zip` passes `codesign --verify --deep --strict`, `spctl` reports `Notarized Developer ID`, and the notarization ticket is stapled, and unless `latest-mac.yml` lists exactly those zips for this version. So a Mac release is either fully signed and notarized, with its update feed, or unsigned without one.
-- Without `MAC_CSC_LINK`, the macOS build is not signed with a Developer ID and cannot install as an in-app update. Set the repository variable `MAC_SIGNING_REQUIRED` to `true` to make such a tag build fail instead. The tag build then drops `latest-mac.yml` and the zip blockmaps and logs a warning. The `.dmg` and `.zip` are still published for manual download (see [Updates](#updates)). The Windows and Linux feeds are published either way.
+- Only macOS releases are signed. The signing secrets (`MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`) live in the protected `release` environment. Branch pushes and pull requests are never signed. Windows builds stay unsigned until Windows signing has a protected job of its own (see `CLAUDE.md`).
+- The released macOS build comes from its own jobs, which run only for `v*` tags after every test has passed. The app's JavaScript is built on a runner with no secrets. The signing job installs dependencies without running their install scripts, then packages, notarizes, smoke-launches and verifies. Setup is in `CLAUDE.md` under "macOS signing setup".
+- A missing or wrong certificate fails the build. A verify step then fails the release unless each `.dmg` is signed and notarized, the app inside every `.dmg` and `.zip` passes `codesign --verify --deep --strict`, `spctl` reports `Notarized Developer ID`, the app's notarization ticket is stapled, and `latest-mac.yml` lists exactly those zips for this version. So a Mac release is fully signed and notarized, with its update feed.
+- Without the signing secrets, a tag build fails. To publish a release with an unsigned Mac build on purpose, set the repository variable `MAC_SIGNING_REQUIRED` to `false`. That release then has no `latest-mac.yml` or zip blockmaps, its notes say the Mac build is unsigned, and the `.dmg` and `.zip` are published for manual download (see [Updates](#updates)). The Windows and Linux feeds are published either way.
+- To rehearse a release without publishing anything, run the workflow from `main` (Actions › Build and Release › Run workflow). It builds, signs, notarizes, smoke-launches and verifies the Mac release exactly as a tag would, and keeps the packages as a workflow artifact for 3 days.
 - Third-party actions are pinned to commit SHAs, and only the release job has write permission.
 
 ## Contributing

@@ -88,7 +88,11 @@ export class UpdateController {
       if (kind === 'manual') await this.notify('Updates Unavailable', 'Updates are only available in packaged builds.', `This copy of Jira Desktop v${this.options.appVersion} is a development build.`)
       return
     }
-    if (this.busy) return
+    if (this.busy) {
+      // The user asked; say why nothing else appears (an automatic check or a download is running)
+      if (kind === 'manual') await this.notify('Already Checking for Updates', 'An update check is already in progress.', 'Any update it finds will be offered in a moment.')
+      return
+    }
     this.busy = true
     try {
       await this.runCheck(kind)
@@ -123,7 +127,7 @@ export class UpdateController {
       if (kind !== 'manual') return
       // Only macOS releases may lack their feed on purpose; elsewhere it is a broken release
       if (this.options.platform === 'darwin' && isMissingUpdateFeed(error)) {
-        await this.offerManualDownload()
+        await this.offerManualDownload('Updates for this copy are installed by hand.')
         return
       }
       await this.notify('Update Check Failed', 'Unable to check for updates', 'There was a problem checking for updates. Please check your internet connection and try again later.', 'warning')
@@ -165,6 +169,13 @@ export class UpdateController {
       await updater.downloadUpdate()
     } catch (error) {
       console.error('Failed to download the update:', error)
+      // On macOS this is also where Squirrel.Mac refuses an update whose signature does not match
+      // the running app (any copy that is not Developer ID signed), which no retry fixes; the
+      // download page works in every case
+      if (this.options.platform === 'darwin') {
+        await this.offerManualDownload('The update could not be installed automatically.')
+        return
+      }
       await this.notify('Update Failed', 'The update could not be downloaded', 'Please check your internet connection and try again later.', 'warning')
       return
     }
@@ -178,19 +189,28 @@ export class UpdateController {
       defaultId: 0,
       cancelId: 1
     })
-    if (restart.response === 0) updater.quitAndInstall()
+    if (restart.response !== 0) return
+    try {
+      updater.quitAndInstall()
+    } catch (error) {
+      console.error('Failed to install the update:', error)
+      if (this.options.platform === 'darwin') await this.offerManualDownload('The update could not be installed automatically.')
+      else await this.notify('Update Failed', 'The update could not be installed', 'Please try again later, or download the latest release from GitHub.', 'warning')
+    }
   }
 
-  // Reached only from a manual check the user started from the menu
+  // macOS only: a manual check on a release with no update feed, or an update the user chose to
+  // install that could not be. The current version is shown so a user already on the newest
+  // release can tell (the feed that would say so is the thing that is missing).
   // codex:run npm test -- tests/unit/UpdateController.test.ts
-  private async offerManualDownload(): Promise<void> {
+  private async offerManualDownload(message: string): Promise<void> {
     let response: number
     try {
       ;({ response } = await this.options.showMessageBox({
         type: 'info',
-        title: 'Updates Are Manual on This Build',
-        message: 'This Mac build cannot update itself.',
-        detail: 'Download the latest release from GitHub, open the .dmg and drag Jira Desktop to Applications.',
+        title: 'Update by Download',
+        message,
+        detail: `Get the newest version from the Releases page. Open the .dmg file and drag Jira Desktop into Applications, replacing the old copy.\n\nYou have version ${this.options.appVersion}. If the Releases page shows the same version, you're up to date.`,
         buttons: [...MANUAL_UPDATE_BUTTONS],
         defaultId: OPEN_RELEASES_PAGE,
         cancelId: 1

@@ -187,7 +187,9 @@ class JiraApp {
       // CI's packaged-app smoke launch (scripts/mac-smoke-launch.sh) waits for this file: it is
       // written last, only once startup ran without throwing. A main-process exception shows an
       // error dialog and leaves the process alive, so "still running" alone would not prove a start.
-      // 'wx' creates a new file and refuses anything already at the path, a symlink included.
+      // It stays on in packaged builds because the packaged app is what it tests; all it can do is
+      // create one empty file in the app's own profile. 'wx' creates a new file and refuses
+      // anything already at the path, a symlink included.
       // codex:run npm run test:e2e -- tests/e2e/smoke.spec.ts
       if (process.env.JIRA_DESKTOP_SMOKE_TEST === '1') {
         try {
@@ -458,9 +460,11 @@ class JiraApp {
 }
 
 // Test isolation: JIRA_DESKTOP_USER_DATA_DIR redirects the whole profile (must run before 'ready'
-// and before JiraApp constructs services that read the userData path)
+// and before JiraApp constructs services that read the userData path). Development builds only:
+// a released app always uses its real profile, so nothing outside it (a launch agent's environment,
+// say) can point it at a prepared profile and its saved site.
 // codex:run npm run test:e2e -- tests/e2e/smoke.spec.ts
-const userDataDirOverride = process.env.JIRA_DESKTOP_USER_DATA_DIR
+const userDataDirOverride = app.isPackaged ? undefined : process.env.JIRA_DESKTOP_USER_DATA_DIR
 if (userDataDirOverride) {
   app.setPath('userData', resolve(userDataDirOverride))
 }

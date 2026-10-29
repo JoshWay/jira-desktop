@@ -196,6 +196,27 @@ describe('UpdateController prompts', () => {
     await Promise.all([updates.check('automatic'), updates.check('manual')])
     expect(updater.checks).toBe(1)
   })
+
+  it('tells the user when their manual check overlaps one already running', async () => {
+    const updates = controller()
+    await Promise.all([updates.check('automatic'), updates.check('manual')])
+    // The automatic check found nothing and stays silent; the manual one explains itself
+    expect(boxes.map((box) => box.title)).toEqual(['Already Checking for Updates'])
+  })
+
+  it('stays silent when an automatic check overlaps a running one', async () => {
+    const updates = controller()
+    await Promise.all([updates.check('manual'), updates.check('automatic')])
+    expect(boxes.map((box) => box.title)).toEqual(['No Updates Available'])
+  })
+
+  it('reports a failed install on Windows and Linux', async () => {
+    updater.available = '2.2.0'
+    updater.quitAndInstall = () => { throw new Error('installer missing') }
+    answers = [UPDATE_NOW, 0, 0]
+    await expect(controller({ platform: 'win32' }).check('automatic')).resolves.toBeUndefined()
+    expect(boxes.map((box) => box.title)).toEqual(['Update Available', 'Downloading Update', 'Update Ready', 'Update Failed'])
+  })
 })
 
 describe('UpdateController Skip This Version', () => {
@@ -260,8 +281,12 @@ describe('UpdateController on a Mac release with no update feed', () => {
     updater.checkError = missingFeedError()
     answers = [OPEN_RELEASES]
     await controller({ platform: 'darwin' }).check('manual')
-    expect(boxes.map((box) => box.title)).toEqual(['Updates Are Manual on This Build'])
+    expect(boxes.map((box) => box.title)).toEqual(['Update by Download'])
     expect(boxes[0]!.buttons).toEqual([...MANUAL_UPDATE_BUTTONS])
+    // The feed that would say "up to date" is missing, so the user gets their version to compare
+    expect(boxes[0]!.detail).toContain('You have version 2.1.0.')
+    // Esc and the close button pick OK, never the browser
+    expect(boxes[0]!.cancelId).toBe(OK)
     expect(opened).toEqual([RELEASES_URL])
     expect(RELEASES_URL).toBe('https://github.com/JoshWay/jira-desktop/releases/latest')
   })
@@ -298,6 +323,30 @@ describe('UpdateController on a Mac release with no update feed', () => {
   it('never rejects when the message cannot be shown', async () => {
     updater.checkError = missingFeedError()
     await expect(controller({ platform: 'darwin', showMessageBox: async () => { throw new Error('no window') } }).check('manual')).resolves.toBeUndefined()
+    expect(opened).toEqual([])
+  })
+})
+
+describe('UpdateController when a Mac update cannot install', () => {
+  it('offers the download page when the download or Squirrel.Mac hand-off fails', async () => {
+    // Squirrel.Mac refuses an update whose signature does not match the running app (any copy
+    // that is not Developer ID signed); electron-updater surfaces that as a failed download
+    updater.available = '2.2.0'
+    updater.downloadError = new Error('Code signature did not pass validation')
+    answers = [UPDATE_NOW, 0, OPEN_RELEASES]
+    await controller({ platform: 'darwin' }).check('automatic')
+    expect(boxes.map((box) => box.title)).toEqual(['Update Available', 'Downloading Update', 'Update by Download'])
+    expect(boxes[2]!.message).toBe('The update could not be installed automatically.')
+    expect(opened).toEqual([RELEASES_URL])
+    expect(updater.installs).toBe(0)
+  })
+
+  it('offers the download page when installing throws', async () => {
+    updater.available = '2.2.0'
+    updater.quitAndInstall = () => { throw new Error('cannot install') }
+    answers = [UPDATE_NOW, 0, 0, OK]
+    await expect(controller({ platform: 'darwin' }).check('automatic')).resolves.toBeUndefined()
+    expect(boxes.map((box) => box.title)).toEqual(['Update Available', 'Downloading Update', 'Update Ready', 'Update by Download'])
     expect(opened).toEqual([])
   })
 })
