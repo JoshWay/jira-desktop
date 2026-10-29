@@ -11,8 +11,9 @@
 # main-process exception shows an error dialog and leaves the process running.
 #
 # A packaged app always uses its real profile (JIRA_DESKTOP_USER_DATA_DIR is honoured only in
-# development builds), so this needs a machine where that profile does not exist yet: a fresh CI
-# runner. Outside CI it refuses to run rather than touch someone's real profile.
+# development builds), so this needs a machine where that profile does not exist yet: a fresh
+# GitHub-hosted runner. Anywhere else it refuses to run rather than touch someone's real profile
+# (CI=true alone is not enough: plenty of local shells and tools set it).
 #
 # The app runs with a stripped environment (no CI tokens or secrets) and shows the local welcome
 # dialog, so it loads no site. A packaged build checks GitHub's public releases for updates a few
@@ -34,11 +35,11 @@ fi
 # SMOKE_PROFILE_DIR only exists so the script can be exercised on Linux (~/.config/...).
 profile="${SMOKE_PROFILE_DIR:-$HOME/Library/Application Support/jira-desktop-app}"
 if [ -e "$profile" ]; then
-  if [ "${CI:-}" != "true" ]; then
-    echo "A Jira Desktop profile already exists at $profile; refusing to launch against it outside CI" >&2
+  if [ "${GITHUB_ACTIONS:-}" != "true" ] || [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+    echo "A Jira Desktop profile already exists at $profile; refusing to launch against it outside a GitHub-hosted runner" >&2
     exit 1
   fi
-  # A CI runner is thrown away after the job; start from an empty profile
+  # A GitHub-hosted runner is thrown away after the job; start from an empty profile
   rm -rf -- "$profile"
 fi
 marker="$profile/smoke-startup-complete"

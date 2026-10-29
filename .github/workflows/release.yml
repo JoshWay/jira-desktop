@@ -412,17 +412,30 @@ jobs:
           echo "::warning title=macOS update feed withheld::the macOS build is unsigned, so it cannot install as an in-app update. latest-mac.yml and the zip blockmaps are not published; mac users must download this release manually."
 
       - name: Upload packages
+        if: github.event_name != 'workflow_dispatch'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-macOS-signed
           if-no-files-found: error
-          # A rehearsal's packages are only for inspection
-          retention-days: ${{ github.event_name == 'workflow_dispatch' && 3 || 30 }}
           path: |
             release/*.dmg
             release/*.zip
             release/latest-mac.yml
             release/*.blockmap
+
+      # A rehearsal's signed, notarized packages are only for the owner to inspect: their own
+      # artifact name (the release job never reads it), one day, and no update feed. Their version
+      # can equal a published release's with different bytes, so they must not look like one.
+      - name: Upload rehearsal packages
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rehearsal-macOS
+          if-no-files-found: error
+          retention-days: 1
+          path: |
+            release/*.dmg
+            release/*.zip
 
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
