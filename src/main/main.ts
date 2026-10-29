@@ -1,10 +1,11 @@
 import { app, BrowserWindow, Menu, nativeTheme, dialog, screen } from 'electron'
 import { autoUpdater } from 'electron-updater'
-import { join, resolve } from 'path'
+import { existsSync } from 'fs'
+import { resolve } from 'path'
 import { WindowManager } from './services/WindowManager'
 import { ContextMenuService } from './services/ContextMenuService'
 import { installWebContentsPolicy, isLocalPageUrl, registerLocalPage } from './security/webContentsPolicy'
-import { isExpectedLoadAbort } from './security/navigationPolicy'
+import { decideNavigation, isExpectedLoadAbort } from './security/navigationPolicy'
 import { localPageUrl } from './security/localPageUrl'
 import { DialogController } from './dialogs/DialogController'
 import { createSettingsStore } from './services/settings'
@@ -12,6 +13,12 @@ import type { SettingsStore, ThemeSource } from './services/settings'
 import { STRANDED_LOAD_DESCRIPTION, describeLoadFailure, isStranded, resolveSavedSiteUrl, shouldShowLoadError } from './services/mainWindowRules'
 import type { LoadFailure } from './services/mainWindowRules'
 import { mainWindowPlacement } from './services/windowBounds'
+import { NavigationController } from './navigation/NavigationController'
+import { sanitizeUserAgent } from './navigation/userAgent'
+import { FindBarController } from './find/FindBarController'
+import { appIconPath, productIconPath } from './services/appIcon'
+import type { IconLocation } from './services/appIcon'
+import { UpdateController } from './updates/UpdateController'
 
 const DEFAULT_WINDOW_SIZE = Object.freeze({ width: 1200, height: 900 })
 const MIN_WINDOW_SIZE = Object.freeze({ width: 800, height: 600 })
@@ -25,17 +32,24 @@ const THEME_CHOICES: readonly { label: string; value: ThemeSource }[] = Object.f
   { label: 'Dark', value: 'dark' }
 ])
 
+// resources/ inside the packaged app, or the repo's when unpackaged (spec R5)
+function iconLocation(): IconLocation {
+  return { isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() }
+}
+
 function logLoadFailure(error: unknown): void {
   if (!isExpectedLoadAbort(error)) console.error('Failed to load:', error)
 }
 
 class JiraApp {
   private mainWindow: BrowserWindow | null = null
-  private manualUpdateCheck: boolean = false
+  private updates: UpdateController
   private windowManager: WindowManager
   private contextMenuService: ContextMenuService
   private dialogs: DialogController
   private settings: SettingsStore
+  private navigation: NavigationController
+  private findBars: FindBarController
   // The static page the main window shows while no site is loaded (first run, failed load)
   private readonly placeholderUrl: string
   private siteUrlCache: { raw: unknown; url: string | undefined } | null = null
@@ -46,8 +60,29 @@ class JiraApp {
     // Script-free and preload-free; registered so remote content can never navigate to it
     this.placeholderUrl = localPageUrl('placeholder.html')
     registerLocalPage(this.placeholderUrl)
-    this.windowManager = new WindowManager()
-    this.contextMenuService = new ContextMenuService(this.windowManager, () => this.siteUrl())
+    // Registers the find bar's IPC channels and page once, at startup (spec R4)
+    // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+    this.findBars = new FindBarController()
+    this.navigation = new NavigationController({
+      isLocalPage: isLocalPageUrl,
+      // As for a remote-content window's own navigation, against the site configured now
+      // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+      isAllowedInWindow: (url) => decideNavigation(url, false, { siteUrl: this.siteUrl(), isLocalPage: isLocalPageUrl }) === 'allow',
+      openFind: (owner) => this.findBars.open(owner),
+      // Back / Forward from the load-error placeholder: as any other site load, about:blank first
+      // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+      leaveLocalPage: (win, url) => this.loadSite(url, win)
+    })
+    // WindowManager windows are content windows too: Back/Forward, swipe, app-command and Find.
+    // Product icons that do not ship fall back to the app icon.
+    // codex:run npm test -- tests/unit/appIcon.test.ts
+    this.windowManager = new WindowManager(
+      (window) => this.navigation.attach(window),
+      (iconFile) => productIconPath(iconLocation(), iconFile, existsSync)
+    )
+    // Its Back / Forward go through the navigation controller, like the Go menu's
+    // codex:run npm test -- tests/unit/ContextMenuService.test.ts
+    this.contextMenuService = new ContextMenuService(this.windowManager, () => this.siteUrl(), this.navigation)
     // Registers the dialog IPC channels once, at startup (spec R2)
     // codex:run npm run test:e2e -- tests/e2e/dialog.spec.ts
     // codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
@@ -58,8 +93,27 @@ class JiraApp {
       retryLoad: (url) => this.loadSite(url),
       windowManager: this.windowManager
     })
+    // Packaged builds only: the feed is the app-update.yml electron-builder generates from
+    // build.publish, and the updater is not even constructed in dev or e2e (spec R5)
+    // codex:run npm test -- tests/unit/UpdateController.test.ts
+    // codex:run npm run test:e2e -- tests/e2e/updates.spec.ts
+    this.updates = new UpdateController({
+      isPackaged: app.isPackaged,
+      appVersion: app.getVersion(),
+      getUpdater: () => autoUpdater,
+      skippedVersion: {
+        get: () => this.settings.get('skippedVersion'),
+        set: (version) => {
+          this.settings.set('skippedVersion', version)
+          this.settings.flush()
+        }
+      },
+      showMessageBox: (options) => {
+        const parent = this.mainWindow
+        return parent && !parent.isDestroyed() ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options)
+      }
+    })
     this.initializeApp()
-    this.setupAutoUpdater()
   }
 
   // The configured site, re-validated from settings.json on every read (the file is outside the
@@ -85,6 +139,12 @@ class JiraApp {
   }
 
   private initializeApp(): void {
+    // Electron's default UA without its Electron/<v> and <app name>/<v> tokens, which Google sign-in
+    // refuses (spec R4). Set before 'ready', so the default session and every window get it.
+    // codex:run npm test -- tests/unit/userAgent.test.ts
+    // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+    app.userAgentFallback = sanitizeUserAgent(app.userAgentFallback, ['Electron', app.getName()])
+
     // Navigation, window.open, <webview> and permission policy for every webContents and session
     // (spec R2). Installed before 'ready' so it covers the first window.
     // codex:run npm run test:e2e -- tests/e2e/security.spec.ts
@@ -109,6 +169,7 @@ class JiraApp {
       nativeTheme.themeSource = this.settings.get('themeSource', 'system')
       this.createWindow()
       this.setupMenu()
+      this.updates.startAutomaticChecks()
 
       app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) {
@@ -156,7 +217,8 @@ class JiraApp {
       minHeight: MIN_WINDOW_SIZE.height,
       show: false,
       autoHideMenuBar: false,
-      icon: join(__dirname, '../../resources/icon.png'),
+      // codex:run npm test -- tests/unit/appIcon.test.ts
+      icon: appIconPath(iconLocation()),
       // Remote content: no preload, no Node, sandboxed and isolated (spec R2). It also shows the
       // placeholder, which needs nothing more.
       webPreferences: {
@@ -216,6 +278,8 @@ class JiraApp {
     })
 
     this.contextMenuService.setupForWindow(win)
+    // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+    this.navigation.attach(win)
 
     const site = this.siteUrl()
     if (site) this.loadSite(site)
@@ -244,17 +308,17 @@ class JiraApp {
     this.showPlaceholder(win, () => this.dialogs.showLoadError(failure))
   }
 
-  // Loads a site URL (already validated: the saved site, a dialog result or a load failure's
-  // retryUrl) in the main window. While it shows the placeholder, a local page, the policy treats
-  // it as confined and would hand the site's own redirects to the browser; so it leaves the
-  // placeholder for about:blank first.
+  // Loads a site URL (already validated: the saved site, a dialog result, a load failure's retryUrl
+  // or a history entry Back / Forward chose) in the main window, or in `win`. While it shows the
+  // placeholder, a local page, the policy treats it as confined and would hand the site's own
+  // redirects to the browser; so it leaves the placeholder for about:blank first.
   // A site load that ends with nothing to show for it shows the error view, not a blank (at startup,
   // never shown) window. The policy cancelling the site's redirect (sent to the browser, or refused)
   // does that: no did-fail-load fires and nothing commits; loadURL only rejects.
   // codex:run npm test -- tests/unit/mainWindowRules.test.ts
   // codex:run npm run test:e2e -- tests/e2e/startup.spec.ts
-  private loadSite(url: string): void {
-    const win = this.mainWindow
+  // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+  private loadSite(url: string, win: BrowserWindow | null = this.mainWindow): void {
     if (!win || win.isDestroyed()) return
     const load = (): void => {
       if (win.isDestroyed()) return
@@ -270,6 +334,8 @@ class JiraApp {
   }
 
   private setupMenu(): void {
+    // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+    const navigation = this.navigation.menuItems()
     const template: Electron.MenuItemConstructorOptions[] = [
       {
         label: 'Jira Desktop',
@@ -284,7 +350,7 @@ class JiraApp {
           { type: 'separator' },
           {
             label: 'Check for Updates...',
-            click: () => this.manualCheckForUpdates()
+            click: () => void this.updates.check('manual')
           },
           { type: 'separator' },
           {
@@ -314,7 +380,9 @@ class JiraApp {
           { role: 'cut' },
           { role: 'copy' },
           { role: 'paste' },
-          { role: 'selectAll' }
+          { role: 'selectAll' },
+          { type: 'separator' },
+          navigation.find
         ]
       },
       {
@@ -343,6 +411,10 @@ class JiraApp {
         ]
       },
       {
+        label: 'Go',
+        submenu: navigation.go
+      },
+      {
         label: 'Window',
         submenu: [
           { role: 'minimize' },
@@ -353,6 +425,7 @@ class JiraApp {
 
     const menu = Menu.buildFromTemplate(template)
     Menu.setApplicationMenu(menu)
+    this.navigation.refreshMenu()
   }
 
   // Applied, persisted, and the menu rebuilt so exactly the chosen radio is checked
@@ -361,146 +434,6 @@ class JiraApp {
     nativeTheme.themeSource = theme
     this.settings.set('themeSource', theme)
     this.setupMenu()
-  }
-
-  private setupAutoUpdater(): void {
-    // Configure auto-updater for GitHub releases
-    autoUpdater.setFeedURL({
-      provider: 'github',
-      owner: 'JoshWay',
-      repo: 'jira-desktop'
-    })
-
-    // Check for updates when app starts (after window is ready)
-    app.whenReady().then(() => {
-      setTimeout(() => {
-        this.checkForUpdates()
-      }, 3000) // Wait 3 seconds after app start
-    })
-
-    // Handle update events
-    autoUpdater.on('update-available', (info) => {
-      this.showUpdateDialog(info)
-    })
-
-    autoUpdater.on('update-not-available', () => {
-      console.log('App is up to date')
-      // Only show dialog for manual checks, not automatic startup checks
-      if (this.manualUpdateCheck) {
-        this.showNoUpdateDialog()
-        this.manualUpdateCheck = false
-      }
-    })
-
-    autoUpdater.on('error', (error) => {
-      console.error('Auto-updater error:', error)
-      // Show user-friendly error dialog for manual checks
-      if (this.manualUpdateCheck) {
-        this.showUpdateErrorDialog(error.message)
-        this.manualUpdateCheck = false
-      }
-    })
-
-    autoUpdater.on('download-progress', (progress) => {
-      console.log(`Download progress: ${Math.round(progress.percent)}%`)
-    })
-
-    autoUpdater.on('update-downloaded', () => {
-      this.showRestartDialog()
-    })
-  }
-
-  private async checkForUpdates(): Promise<void> {
-    try {
-      await autoUpdater.checkForUpdates()
-    } catch (error) {
-      console.error('Failed to check for updates:', error)
-      // Error handling is done in the error event handler
-    }
-  }
-
-  private async manualCheckForUpdates(): Promise<void> {
-    this.manualUpdateCheck = true
-    try {
-      await this.checkForUpdates()
-    } catch (error) {
-      // Fallback error handling if the event handler doesn't catch it
-      if (this.manualUpdateCheck) {
-        this.showUpdateErrorDialog('Unable to check for updates. Please try again later.')
-        this.manualUpdateCheck = false
-      }
-    }
-  }
-
-  private async showUpdateDialog(updateInfo: any): Promise<void> {
-    const result = await dialog.showMessageBox(this.mainWindow!, {
-      type: 'info',
-      title: 'Update Available',
-      message: `Jira Desktop v${updateInfo.version} is available!`,
-      detail: `You're currently running v${app.getVersion()}. Would you like to download and install the update?`,
-      buttons: ['Update Now', 'Remind Me Later', 'Skip This Version'],
-      defaultId: 0,
-      cancelId: 1
-    })
-
-    switch (result.response) {
-      case 0: // Update Now
-        autoUpdater.downloadUpdate()
-        this.showDownloadingDialog()
-        break
-      case 1: // Remind Me Later
-        console.log('User chose to be reminded later')
-        break
-      case 2: // Skip This Version
-        console.log('User chose to skip this version')
-        break
-    }
-  }
-
-  private showDownloadingDialog(): void {
-    dialog.showMessageBox(this.mainWindow!, {
-      type: 'info',
-      title: 'Downloading Update',
-      message: 'Downloading update...',
-      detail: 'The update is being downloaded in the background. You\'ll be notified when it\'s ready to install.',
-      buttons: ['OK']
-    })
-  }
-
-  private async showRestartDialog(): Promise<void> {
-    const result = await dialog.showMessageBox(this.mainWindow!, {
-      type: 'info',
-      title: 'Update Ready',
-      message: 'Update downloaded successfully!',
-      detail: 'The update has been downloaded and is ready to install. Would you like to restart the app now?',
-      buttons: ['Restart Now', 'Restart Later'],
-      defaultId: 0,
-      cancelId: 1
-    })
-
-    if (result.response === 0) {
-      autoUpdater.quitAndInstall()
-    }
-  }
-
-  private showNoUpdateDialog(): void {
-    dialog.showMessageBox(this.mainWindow!, {
-      type: 'info',
-      title: 'No Updates Available',
-      message: 'You\'re running the latest version!',
-      detail: `Jira Desktop v${app.getVersion()} is up to date. No new updates are available at this time.`,
-      buttons: ['OK']
-    })
-  }
-
-  private showUpdateErrorDialog(_errorMessage: string): void {
-    dialog.showMessageBox(this.mainWindow!, {
-      type: 'warning',
-      title: 'Update Check Failed',
-      message: 'Unable to check for updates',
-      detail: 'There was a problem checking for updates. Please check your internet connection and try again later.',
-      buttons: ['OK']
-    })
   }
 }
 

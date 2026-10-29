@@ -1,5 +1,4 @@
 import { BrowserWindow, screen } from 'electron'
-import { join } from 'path'
 import { StorageService } from './StorageService'
 import type { StorageData } from './StorageService'
 import { fitBoundsToDisplays } from './windowBounds'
@@ -82,6 +81,10 @@ export class WindowManager {
   private windowStates: Map<string, WindowState> = new Map()
   private storage: StorageService<WindowStatesFile>
   private saveStateTimeout: NodeJS.Timeout | null = null
+  // Called with each window right after it is constructed, before it loads anything
+  private readonly onWindowCreated?: (window: BrowserWindow) => void
+  // Maps a product's icon file name to the icon path to use; without it Electron's default is used
+  private readonly resolveIcon?: (iconFile: string) => string
 
   private readonly products: Map<string, AtlassianProduct> = new Map([
     ['jira', {
@@ -134,7 +137,13 @@ export class WindowManager {
     }]
   ])
 
-  constructor() {
+  // onWindowCreated: lets main make every window it creates a content window (navigation, find)
+  // resolveIcon: lets main resolve product icons against the packaged or dev resources folder
+  // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+  // codex:run npm test -- tests/unit/WindowManager.test.ts
+  constructor(onWindowCreated?: (window: BrowserWindow) => void, resolveIcon?: (iconFile: string) => string) {
+    this.onWindowCreated = onWindowCreated
+    this.resolveIcon = resolveIcon
     // StorageService loads synchronously, so saved states are available here (spec R3)
     // codex:run npm test -- tests/unit/WindowManager.test.ts
     this.storage = new StorageService<WindowStatesFile>('window-states.json', { sanitize: sanitizeWindowStates })
@@ -220,6 +229,9 @@ export class WindowManager {
           allowRunningInsecureContent: false
         }
       })
+
+      // codex:run npm test -- tests/unit/WindowManager.test.ts
+      this.onWindowCreated?.(window)
 
       // Setup window event handlers
       this.setupWindowEvents(window, windowId, config.product)
@@ -340,8 +352,8 @@ export class WindowManager {
     }
   }
 
-  private getProductIcon(product: AtlassianProduct): string {
-    return join(__dirname, '../../resources', product.icon)
+  private getProductIcon(product: AtlassianProduct): string | undefined {
+    return this.resolveIcon?.(product.icon)
   }
 
   private loadWindowStates(): void {

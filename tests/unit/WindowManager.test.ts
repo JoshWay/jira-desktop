@@ -36,7 +36,11 @@ vi.mock('electron', () => ({
       this.listeners.set(name, [...(this.listeners.get(name) ?? []), listener])
       return this
     }
-    loadURL() { return Promise.resolve() }
+    loaded = false
+    loadURL() {
+      this.loaded = true
+      return Promise.resolve()
+    }
     show() {}
     showInactive() {}
     focus() {}
@@ -189,5 +193,39 @@ describe('sanitizeWindowStates', () => {
     })
     expect(file.windowStates).toEqual([{ ...good, url: '', isMaximized: false, isMinimized: false }])
     expect(sanitizeWindowStates({ windowStates: { 0: good } })).toEqual({})
+  })
+})
+
+describe('WindowManager onWindowCreated', () => {
+  it('hands each new window to the hook before it loads anything', async () => {
+    const seen: { loaded: boolean }[] = []
+    const manager = new WindowManager((window) => seen.push({ loaded: (window as unknown as { loaded: boolean }).loaded }))
+    const created = await manager.createWindow({ url: URL, product: manager.identifyProduct(URL)! })
+    expect(seen).toEqual([{ loaded: false }])
+    expect((created as unknown as { loaded: boolean }).loaded).toBe(true)
+  })
+
+  it('is optional', async () => {
+    const manager = new WindowManager()
+    expect(await manager.createWindow({ url: URL, product: manager.identifyProduct(URL)! })).not.toBeNull()
+  })
+})
+
+describe('WindowManager icons', () => {
+  it('asks the icon resolver for the product icon', async () => {
+    const asked: string[] = []
+    const manager = new WindowManager(undefined, (file) => {
+      asked.push(file)
+      return `/resolved/${file}`
+    })
+    await manager.createWindow({ url: URL, product: manager.identifyProduct(URL)! })
+    expect(asked).toEqual(['confluence-icon.png'])
+    expect(fake.created[0]!.options.icon).toBe('/resolved/confluence-icon.png')
+  })
+
+  it('leaves the icon to Electron without a resolver', async () => {
+    const manager = new WindowManager()
+    await manager.createWindow({ url: URL, product: manager.identifyProduct(URL)! })
+    expect(fake.created[0]!.options.icon).toBeUndefined()
   })
 })
