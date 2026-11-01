@@ -1,9 +1,8 @@
 import { resolve } from 'path'
-import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import { defineConfig } from 'electron-vite'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
     build: {
       outDir: 'dist/main',
       rollupOptions: {
@@ -13,13 +12,14 @@ export default defineConfig({
       }
     }
   },
+  // Per-window preloads for local pages only (sandboxed, so each is one self-contained CJS file)
   preload: {
-    plugins: [externalizeDepsPlugin()],
     build: {
       outDir: 'dist/preload',
       rollupOptions: {
         input: {
-          index: resolve(__dirname, 'src/preload/preload.ts')
+          dialog: resolve(__dirname, 'src/preload/dialog.ts'),
+          find: resolve(__dirname, 'src/preload/find.ts')
         }
       }
     }
@@ -30,7 +30,11 @@ export default defineConfig({
       outDir: 'dist/renderer',
       rollupOptions: {
         input: {
-          index: resolve(__dirname, 'src/renderer/index.html')
+          dialog: resolve(__dirname, 'src/renderer/dialog.html'),
+          // The find bar, overlaid on a content window (src/main/find/FindBarController.ts)
+          find: resolve(__dirname, 'src/renderer/find.html'),
+          // Static, script-free page the main window shows while no site is loaded
+          placeholder: resolve(__dirname, 'src/renderer/placeholder.html')
         }
       }
     }
