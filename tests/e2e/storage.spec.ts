@@ -13,7 +13,9 @@ test.beforeEach(async () => {
 })
 
 test.afterEach(async () => {
-  await rm(userDataDir, { recursive: true, force: true })
+  // On Windows a Chromium child process can hold a profile file (Network/Trust Tokens-journal) for
+  // a moment after the app quits; rm's retries are made for that EBUSY/EPERM case
+  await rm(userDataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
 })
 
 test('saved window states survive a launch and quit, written atomically on quit', async ({ launchApp }) => {
