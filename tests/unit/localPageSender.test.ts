@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isFromLocalPage } from '../../src/main/security/localPageSender'
+import { findLocalPageSender, isFromLocalPage } from '../../src/main/security/localPageSender'
 import type { SenderContents, SenderFrame } from '../../src/main/security/localPageSender'
 
 const PAGE_URL = 'file:///app/dist/renderer/dialog.html'
@@ -54,5 +54,26 @@ describe('isFromLocalPage', () => {
     expect(isFromLocalPage({ sender: dialog, senderFrame: urlThrows }, { contents: dialog, pageUrl: PAGE_URL })).toBe(false)
     const broken: SenderContents = { isDestroyed: () => { throw new Error('gone') } }
     expect(isFromLocalPage({ sender: broken, senderFrame: frame(PAGE_URL) }, { contents: broken, pageUrl: PAGE_URL })).toBe(false)
+  })
+})
+
+describe('findLocalPageSender', () => {
+  const FIND_URL = 'file:///app/dist/renderer/find.html'
+
+  it('returns the one open page the call comes from', () => {
+    const a = { contents: contents(), pageUrl: FIND_URL, name: 'a' }
+    const b = { contents: contents(), pageUrl: FIND_URL, name: 'b' }
+    expect(findLocalPageSender({ sender: b.contents, senderFrame: frame(FIND_URL) }, [a, b])).toBe(b)
+    expect(findLocalPageSender({ sender: a.contents, senderFrame: frame(FIND_URL) }, [a, b])).toBe(a)
+  })
+
+  it('returns null for any sender that is not one of them, as isFromLocalPage would refuse it', () => {
+    const a = { contents: contents(), pageUrl: FIND_URL }
+    const destroyed = { contents: contents(true), pageUrl: FIND_URL }
+    expect(findLocalPageSender({ sender: contents(), senderFrame: frame(FIND_URL) }, [a])).toBeNull()
+    expect(findLocalPageSender({ sender: a.contents, senderFrame: frame(FIND_URL, frame(FIND_URL)) }, [a])).toBeNull()
+    expect(findLocalPageSender({ sender: a.contents, senderFrame: frame('https://team.atlassian.net/') }, [a])).toBeNull()
+    expect(findLocalPageSender({ sender: destroyed.contents, senderFrame: frame(FIND_URL) }, [destroyed])).toBeNull()
+    expect(findLocalPageSender({ sender: a.contents, senderFrame: frame(FIND_URL) }, [])).toBeNull()
   })
 })

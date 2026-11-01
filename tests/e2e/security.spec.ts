@@ -3,7 +3,7 @@
 // shell.openExternal is the harness recorder, so nothing ever reaches the OS.
 import type { ElectronApplication, Page } from '@playwright/test'
 import { resolve } from 'node:path'
-import { expect, test } from './helpers/app'
+import { E2E_SITE_URL, expect, test } from './helpers/app'
 import type { LaunchedApp } from './helpers/app'
 import { DIALOG_PAGE, closeVia, openDialog } from './helpers/dialog'
 
@@ -18,7 +18,8 @@ declare global {
   var __securityE2E: { navigations: NavigationRecord[] } | undefined
 }
 
-const START_URL = 'https://id.atlassian.com/login'
+// The site every launch here is configured for (written to settings.json by the fixture)
+const START_URL = E2E_SITE_URL
 
 // Records every main-frame navigation/redirect on every contents (current and future), after the
 // app's own policy listener has run, so `prevented` is the policy's verdict.
@@ -49,6 +50,9 @@ async function navigate(app: LaunchedApp, page: Page, url: string): Promise<Navi
 }
 
 async function prefsOf(electronApp: ElectronApplication, url: string) {
+  // Playwright reports a popup once its page has the URL; the main process's webContents.getURL()
+  // can catch up a moment later on a loaded machine, so wait for main to see the window first
+  await expect.poll(() => electronApp.evaluate(({ BrowserWindow }, target) => BrowserWindow.getAllWindows().some((w) => w.webContents.getURL() === target), url)).toBe(true)
   return electronApp.evaluate(({ BrowserWindow, session }, target) => {
     const win = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL() === target)
     if (!win) throw new Error(`no window at ${target}`)

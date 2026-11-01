@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <!-- Static and script-free: the main window shows it while no site is loaded (first run, or a
+       failed load). It has no preload and no bridge; the dialog window does the talking. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jira Desktop</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f4f5f7;
+      --fg: #172b4d;
+      --muted: #5e6c84;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1d2125;
+        --fg: #dee4ea;
+        --muted: #9fadbc;
+      }
+    }
+
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      box-sizing: border-box;
+      background: var(--bg);
+      color: var(--fg);
+      font: 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      text-align: center;
+      user-select: none;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 22px;
+      font-weight: 600;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <h1>Jira Desktop</h1>
+  <p>No Jira site is open. Choose Jira Desktop &rsaquo; Set Jira URL&hellip; to connect.</p>
+</body>
+</html>

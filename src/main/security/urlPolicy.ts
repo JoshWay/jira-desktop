@@ -16,6 +16,10 @@ export const AUTH_HOSTS: readonly string[] = Object.freeze([
   'pingidentity.com'
 ])
 
+// Atlassian's marketing apex and account/login host: in-app, but never a user's Jira site, so the
+// app never starts on (or saves as the site) its login or marketing page (spec R3)
+export const NOT_SITE_HOSTS: readonly string[] = Object.freeze(['atlassian.net', 'www.atlassian.net', 'id.atlassian.com'])
+
 export type NormalizeResult = { ok: true; url: string } | { ok: false; error: string }
 
 function parse(url: string): URL | null {
@@ -56,6 +60,13 @@ export function isInAppUrl(url: string, configuredSiteUrl?: string): boolean {
   )
 }
 
+// Exact host match only: team.atlassian.net and jira.atlassian.com are sites
+// codex:run npm test -- tests/unit/urlPolicy.test.ts
+export function isNotASiteUrl(url: string): boolean {
+  const u = parse(url)
+  return !!u && NOT_SITE_HOSTS.includes(cleanHost(u.hostname))
+}
+
 export function isAuthUrl(url: string): boolean {
   const u = parse(url)
   return !!u && u.protocol === 'https:' && AUTH_HOSTS.some((h) => hostMatches(u.hostname, h))
@@ -91,7 +102,12 @@ export function normalizeJiraUrl(input: string): NormalizeResult {
   if (host.endsWith('.') || host.includes('..') || host.startsWith('.')) {
     return { ok: false, error: 'That does not look like a valid address.' }
   }
-  if (!host.includes('.') && host !== 'localhost') {
+  // The dot rule catches a bare name typed in place of a site ("intranet"). A bracketed IPv6
+  // literal has no dots either, but it is a complete address the parser has already validated,
+  // and a self-hosted site may be one (isInAppUrl matches IPv6 origins), so it passes.
+  // codex:run npm test -- tests/unit/urlPolicy.test.ts
+  const ipv6Literal = host.startsWith('[') && host.endsWith(']')
+  if (!host.includes('.') && host !== 'localhost' && !ipv6Literal) {
     return { ok: false, error: 'Enter the full address, such as your-team.atlassian.net.' }
   }
   u.hostname = host

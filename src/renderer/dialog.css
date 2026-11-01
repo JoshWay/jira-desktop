@@ -78,6 +78,27 @@ input[aria-invalid='true'] {
   font-weight: 400;
 }
 
+#message {
+  margin: 0 0 12px;
+}
+
+#failed-url {
+  max-height: 4.2em;
+  margin: 0 0 14px;
+  padding: 6px 8px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--field-bg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+[hidden] {
+  display: none !important;
+}
+
 #error {
   margin: 0 0 14px;
   color: var(--error);

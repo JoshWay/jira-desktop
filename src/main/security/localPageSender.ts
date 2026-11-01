@@ -36,3 +36,13 @@ export function isFromLocalPage(event: InvokeEventLike, page: ExpectedPage): boo
     return false
   }
 }
+
+// For a page that may be open in several places at once (one find bar per window): the one of
+// `pages` the call comes from, by the same check as isFromLocalPage, or null.
+// codex:run npm test -- tests/unit/localPageSender.test.ts
+export function findLocalPageSender<P extends ExpectedPage>(event: InvokeEventLike, pages: Iterable<P>): P | null {
+  for (const page of pages) {
+    if (isFromLocalPage(event, page)) return page
+  }
+  return null
+}

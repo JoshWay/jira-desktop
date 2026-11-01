@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { MAX_URL_LENGTH, NOT_IN_APP_ERROR, parseSubmitPayload, validateDialogUrl } from '../../src/main/dialogs/dialogRules'
+import { MAX_URL_LENGTH, NOT_A_SITE_ERROR, NOT_IN_APP_ERROR, parseLoadErrorSubmit, parseSubmitPayload, validateDialogUrl } from '../../src/main/dialogs/dialogRules'
 
 describe('parseSubmitPayload', () => {
   it('accepts a set-url payload and keeps only the url', () => {
     expect(parseSubmitPayload('set-url', { url: 'team.atlassian.net', product: undefined, background: undefined })).toEqual({ url: 'team.atlassian.net' })
     expect(parseSubmitPayload('set-url', { url: '', product: 'jira', background: true, extra: 1 })).toEqual({ url: '' })
+  })
+
+  it('accepts a welcome payload exactly like set-url', () => {
+    expect(parseSubmitPayload('welcome', { url: 'team.atlassian.net', product: 'jira', background: true })).toEqual({ url: 'team.atlassian.net' })
+    expect(parseSubmitPayload('welcome', { url: 42 })).toBeNull()
   })
 
   it('accepts a new-window payload with a known product and a boolean background', () => {
@@ -35,7 +40,36 @@ describe('parseSubmitPayload', () => {
   })
 })
 
+describe('parseLoadErrorSubmit', () => {
+  it('accepts exactly the two actions and keeps only the action', () => {
+    expect(parseLoadErrorSubmit({ action: 'retry' })).toEqual({ action: 'retry' })
+    expect(parseLoadErrorSubmit({ action: 'change-url', url: 'https://evil.test/' })).toEqual({ action: 'change-url' })
+  })
+
+  it('rejects anything the page cannot produce', () => {
+    for (const raw of [undefined, null, 'retry', [], {}, { action: 'RETRY' }, { action: 'toString' }, { action: 'quit' }, { action: ['retry'] }, { url: 'https://acme.atlassian.net/' }]) {
+      expect(parseLoadErrorSubmit(raw), JSON.stringify(raw)).toBeNull()
+    }
+  })
+})
+
 describe('validateDialogUrl', () => {
+  it('set-url and welcome refuse the Atlassian login and marketing pages as a site', () => {
+    for (const mode of ['set-url', 'welcome'] as const) {
+      for (const input of ['atlassian.net', 'https://id.atlassian.com/login', 'www.atlassian.net']) {
+        expect(validateDialogUrl(mode, input), `${mode} ${input}`).toEqual({ ok: false, error: NOT_A_SITE_ERROR })
+      }
+    }
+    // A new window may still open them (they are in-app)
+    expect(validateDialogUrl('new-window', 'https://id.atlassian.com/login')).toEqual({ ok: true, url: 'https://id.atlassian.com/login' })
+  })
+
+  it('welcome accepts what set-url accepts, without the in-app restriction', () => {
+    expect(validateDialogUrl('welcome', 'team.atlassian.net')).toEqual({ ok: true, url: 'https://team.atlassian.net/jira' })
+    expect(validateDialogUrl('welcome', 'https://jira.corp.test/')).toEqual({ ok: true, url: 'https://jira.corp.test/' })
+    expect(validateDialogUrl('welcome', 'file:///etc/passwd')).toEqual({ ok: false, error: 'Only http and https addresses are supported.' })
+  })
+
   it('set-url accepts any address normalizeJiraUrl accepts, normalized', () => {
     expect(validateDialogUrl('set-url', 'team.atlassian.net')).toEqual({ ok: true, url: 'https://team.atlassian.net/jira' })
     expect(validateDialogUrl('set-url', 'https://jira.corp.test/')).toEqual({ ok: true, url: 'https://jira.corp.test/' })
