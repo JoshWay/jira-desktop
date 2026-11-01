@@ -1,5 +1,8 @@
-import { BrowserWindow, Menu, MenuItem, ipcMain } from 'electron'
+import { BrowserWindow, Menu, MenuItem } from 'electron'
 import { WindowManager, WindowConfig } from './WindowManager'
+import { isInAppUrl } from '../security/urlPolicy'
+import { navigationAccelerators } from '../navigation/navigationRules'
+import type { HistoryStep } from '../navigation/navigationRules'
 
 export interface ContextMenuParams {
   x: number
@@ -11,22 +14,24 @@ export interface ContextMenuParams {
   selectionText: string
 }
 
+// Back / Forward as NavigationController does them for the Go menu: the same history rules (never
+// the placeholder or the about:blank step, re-checked against the policy) and the same way off a
+// local page
+export interface ContextMenuNavigation {
+  canGo(win: BrowserWindow, step: HistoryStep): boolean
+  go(win: BrowserWindow, step: HistoryStep): void
+}
+
 export class ContextMenuService {
   private windowManager: WindowManager
+  private getConfiguredSiteUrl: () => string | undefined
+  private navigation: ContextMenuNavigation
 
-  constructor(windowManager: WindowManager) {
+  // getConfiguredSiteUrl: the same getter the webContents policy uses, so the user's own site counts as in-app
+  constructor(windowManager: WindowManager, getConfiguredSiteUrl: () => string | undefined, navigation: ContextMenuNavigation) {
     this.windowManager = windowManager
-    this.setupContextMenuHandlers()
-  }
-
-  private setupContextMenuHandlers(): void {
-    // Handle context menu events from webContents
-    ipcMain.handle('show-context-menu', async (event, params: ContextMenuParams) => {
-      const sourceWindow = BrowserWindow.fromWebContents(event.sender)
-      if (!sourceWindow) return
-
-      await this.showContextMenu(sourceWindow, params)
-    })
+    this.getConfiguredSiteUrl = getConfiguredSiteUrl
+    this.navigation = navigation
   }
 
   public setupForWindow(window: BrowserWindow): void {
@@ -89,12 +94,14 @@ export class ContextMenuService {
     }
 
     // Add separator if we have standard items and will add Atlassian items
-    if (menuItems.length > 0 && params.linkURL && this.isAtlassianLink(params.linkURL)) {
+    // codex:run npm test -- tests/unit/ContextMenuService.test.ts
+    const inAppLink = !!params.linkURL && isInAppUrl(params.linkURL, this.getConfiguredSiteUrl())
+    if (menuItems.length > 0 && inAppLink) {
       menuItems.push(new MenuItem({ type: 'separator' }))
     }
 
     // Atlassian-specific menu items
-    if (params.linkURL && this.isAtlassianLink(params.linkURL)) {
+    if (inAppLink) {
       const product = this.windowManager.identifyProduct(params.linkURL)
       const productName = product ? product.name : 'Atlassian'
 
@@ -122,25 +129,26 @@ export class ContextMenuService {
       menuItems.push(new MenuItem({ type: 'separator' }))
     }
 
+    // Through the navigation controller, never webContents.goBack() / goForward(): those would
+    // walk onto the placeholder and the about:blank step, and skip the policy re-check
+    // codex:run npm test -- tests/unit/ContextMenuService.test.ts
+    // codex:run npm run test:e2e -- tests/e2e/navigation.spec.ts
+    const accelerators = navigationAccelerators(process.platform)
     menuItems.push(
       new MenuItem({
         label: 'Back',
-        accelerator: 'Alt+Left',
-        enabled: window.webContents.canGoBack(),
-        click: () => {
-          window.webContents.goBack()
-        }
+        accelerator: accelerators.back,
+        enabled: this.navigation.canGo(window, -1),
+        click: () => this.navigation.go(window, -1)
       })
     )
 
     menuItems.push(
       new MenuItem({
         label: 'Forward',
-        accelerator: 'Alt+Right',
-        enabled: window.webContents.canGoForward(),
-        click: () => {
-          window.webContents.goForward()
-        }
+        accelerator: accelerators.forward,
+        enabled: this.navigation.canGo(window, 1),
+        click: () => this.navigation.go(window, 1)
       })
     )
 
@@ -216,28 +224,10 @@ export class ContextMenuService {
       this.emitTelemetryEvent('window_spawn_failed', {
         product: product?.id || 'unknown',
         url: new URL(url).hostname,
-        error: error.message
+        error: error instanceof Error ? error.message : String(error)
       })
     }
   }
-
-  private isAtlassianLink(url: string): boolean {
-    try {
-      const parsedUrl = new URL(url)
-      const hostname = parsedUrl.hostname.toLowerCase()
-      
-      return (
-        hostname.includes('atlassian.net') ||
-        hostname.includes('atlassian.com') ||
-        hostname.includes('bitbucket.org') ||
-        hostname.includes('trello.com') ||
-        hostname === 'id.atlassian.com'
-      )
-    } catch {
-      return false
-    }
-  }
-
 
   private emitTelemetryEvent(eventName: string, data: any): void {
     // TODO: Implement telemetry emission
