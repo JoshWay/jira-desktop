@@ -4,6 +4,28 @@ A desktop app for Atlassian Jira on macOS, Windows and Linux. It opens your Jira
 
 Built with Electron 44, TypeScript, electron-vite and electron-builder.
 
+## Screenshots
+
+Screens from the built macOS app using example addresses, in light and dark appearance. After you connect, the main window displays your own Jira site.
+
+### Connect your Jira site
+
+Enter an Atlassian Cloud address or your own Jira URL on first launch.
+
+<img src="docs/screenshots/welcome.png" alt="Jira Desktop welcome screen in light appearance, with an example Jira address and Open Jira button" width="480">
+
+### Open another Atlassian product
+
+Choose a product and optionally open it in the background. Shown here with Confluence in dark appearance.
+
+<img src="docs/screenshots/new-atlassian-window.png" alt="New Atlassian Window dialog in dark appearance, with Confluence selected and Open in background checked" width="480">
+
+### Recover from a failed connection
+
+Retry the page or change the saved address if a site cannot be reached.
+
+<img src="docs/screenshots/load-error.png" alt="Jira Desktop connection recovery screen showing the failed example URL, Change URL and Retry buttons" width="480">
+
 ## Install
 
 Download the latest build from [GitHub Releases](https://github.com/JoshWay/jira-desktop/releases/latest). Files are named `Jira-Desktop-<version>-<os>-<arch>.<ext>`.
